@@ -11,7 +11,7 @@ export class EventClassifier {
   async classifyTransfer(
     from: string,
     to: string,
-    txHash: string,
+    _txHash: string,
     txReceipt: any,
     chainId: ChainId
   ): Promise<EventClassification> {
@@ -32,7 +32,7 @@ export class EventClassifier {
   /**
    * Classifies burn events - distinguishes unstake burns from bridge burns
    */
-  private classifyBurn(txReceipt: any, chainId: ChainId): EventClassification {
+  private classifyBurn(txReceipt: any, _chainId: ChainId): EventClassification {
     if (!txReceipt || !txReceipt.input) {
       return CONSTANTS.EVENT_CLASSIFICATIONS.TRANSFER;
     }
@@ -58,7 +58,7 @@ export class EventClassifier {
   /**
    * Classifies mint events - typically from bridge mints
    */
-  private classifyMint(txReceipt: any, chainId: ChainId): EventClassification {
+  private classifyMint(txReceipt: any, _chainId: ChainId): EventClassification {
     // Check if this mint is from a bridge operation
     // This would typically check if the transaction originated from LayerZero endpoint
     if (this.isBridgeMint(txReceipt)) {

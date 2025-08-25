@@ -4,7 +4,7 @@ import { getDb } from '../../db/connection';
 import { config } from '../../config';
 import { createLogger } from '../../utils/logger';
 import { AccrualEngine } from '../../accrual/AccrualEngine';
-import { EventIndexer } from '../../indexer/EventIndexer';
+// import { EventIndexer } from '../../indexer/EventIndexer';
 
 const logger = createLogger('API:Admin');
 
@@ -72,7 +72,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /admin/config
    * Returns all configuration values
    */
-  fastify.get('/config', async (request, reply) => {
+  fastify.get('/config', async (_request, reply) => {
     try {
       const configs = await db('config').select('*');
       
@@ -94,7 +94,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /admin/recalculate
    * Triggers full recalculation of all droplets
    */
-  fastify.post('/recalculate', async (request, reply) => {
+  fastify.post('/recalculate', async (_request, reply) => {
     try {
       const accrualEngine = new AccrualEngine();
       
@@ -155,7 +155,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /admin/stats
    * Returns system statistics
    */
-  fastify.get('/stats', async (request, reply) => {
+  fastify.get('/stats', async (_request, reply) => {
     try {
       const stats = await Promise.all([
         db('share_events').count('* as total').first(),

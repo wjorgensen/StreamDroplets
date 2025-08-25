@@ -101,30 +101,30 @@ export class ChainlinkService {
     }
   }
   
-  /**
-   * Finds the closest Chainlink round before a given block
-   */
-  private async _findClosestRound(
-    aggregatorAddress: `0x${string}`,
-    targetBlock: bigint
-  ): Promise<bigint> {
-    try {
-      // This is a simplified version
-      // In production, you'd binary search through historical rounds
-      const latestData = await this.client.readContract({
-        address: aggregatorAddress,
-        abi: CHAINLINK_AGGREGATOR_ABI,
-        functionName: 'latestRoundData',
-        blockNumber: targetBlock,
-      });
-      
-      return (latestData as any)[1]; // Return the answer
-      
-    } catch (error) {
-      logger.error(`Error finding closest Chainlink round:`, error);
-      throw error;
-    }
-  }
+  // /**
+  //  * Finds the closest Chainlink round before a given block
+  //  */
+  // private async _findClosestRound(
+  //   aggregatorAddress: `0x${string}`,
+  //   targetBlock: bigint
+  // ): Promise<bigint> {
+  //   try {
+  //     // This is a simplified version
+  //     // In production, you'd binary search through historical rounds
+  //     const latestData = await this.client.readContract({
+  //       address: aggregatorAddress,
+  //       abi: CHAINLINK_AGGREGATOR_ABI,
+  //       functionName: 'latestRoundData',
+  //       blockNumber: targetBlock,
+  //     });
+  //     
+  //     return (latestData as any)[1]; // Return the answer
+  //     
+  //   } catch (error) {
+  //     logger.error(`Error finding closest Chainlink round:`, error);
+  //     throw error;
+  //   }
+  // }
   
   /**
    * Stores oracle price in database

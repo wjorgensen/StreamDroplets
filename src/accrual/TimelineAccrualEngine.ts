@@ -1,9 +1,8 @@
 import { getDb } from '../db/connection';
-import { config } from '../config';
-import { CONSTANTS, AssetType } from '../config/constants';
+import { AssetType } from '../config/constants';
 import { createLogger } from '../utils/logger';
 import { TimelineIndexer } from '../indexer/TimelineIndexer';
-import { TimelineOracleService } from '../oracle/TimelineOracleService';
+// import { TimelineOracleService } from '../oracle/TimelineOracleService';
 import { DropletsResult } from '../types';
 
 const logger = createLogger('TimelineAccrualEngine');
@@ -23,11 +22,11 @@ export interface DropletsIntegration {
 export class TimelineAccrualEngine {
   private db = getDb();
   private timelineIndexer: TimelineIndexer;
-  private oracleService: TimelineOracleService;
+  // private oracleService: TimelineOracleService;
   
   constructor() {
     this.timelineIndexer = new TimelineIndexer();
-    this.oracleService = new TimelineOracleService();
+    // this.oracleService = new TimelineOracleService();
   }
   
   /**
@@ -91,7 +90,7 @@ export class TimelineAccrualEngine {
       : newDroplets;
     
     // Update cache
-    await this.updateCache(address, asset, totalDroplets, calculationEnd, calculationEnd);
+    await this.updateCache(address, asset, totalDroplets, calculationEnd);
     
     return totalDroplets;
   }
@@ -272,7 +271,7 @@ export class TimelineAccrualEngine {
   /**
    * Recalculate droplets for all addresses (for validation)
    */
-  async recalculateAll(startTime?: Date, endTime?: Date): Promise<void> {
+  async recalculateAll(_startTime?: Date, _endTime?: Date): Promise<void> {
     logger.info('Starting full recalculation of all droplets');
     
     // Get all unique addresses

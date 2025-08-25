@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { AccrualEngine } from '../../accrual/AccrualEngine';
+// import { AccrualEngine } from '../../accrual/AccrualEngine';
 import { createLogger } from '../../utils/logger';
 import { getDb } from '../../db/connection';
 
@@ -12,7 +12,7 @@ const querySchema = z.object({
 });
 
 export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
-  const accrualEngine = new AccrualEngine();
+  // const accrualEngine = new AccrualEngine();
   
   /**
    * GET /leaderboard

@@ -1,7 +1,7 @@
 import { getDb } from '../db/connection';
 import { AssetType, ChainId } from '../config/constants';
 import { createLogger } from '../utils/logger';
-import { CurrentBalance, BalanceSnapshot } from '../types';
+import { BalanceSnapshot } from '../types';
 
 const logger = createLogger('BalanceTracker');
 

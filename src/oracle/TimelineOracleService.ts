@@ -1,4 +1,4 @@
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, http, parseAbi } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
@@ -56,7 +56,7 @@ export class TimelineOracleService {
     const existing = await this.db('oracle_prices_timeline')
       .where({
         asset,
-        chain_id: chainId,
+        chain_id: _chainId,
         block_number: blockNumber.toString()
       })
       .first();
@@ -71,7 +71,7 @@ export class TimelineOracleService {
     // Store in database
     await this.storePriceTimeline({
       asset,
-      chain_id: chainId,
+      chain_id: _chainId,
       block_number: blockNumber,
       timestamp: new Date(), // This should be the block timestamp
       price_usd: price.toString(),
@@ -92,7 +92,7 @@ export class TimelineOracleService {
   ): Promise<bigint> {
     // Find the closest price snapshot in the interval
     const price = await this.db('oracle_prices_timeline')
-      .where({ asset, chain_id: chainId })
+      .where({ asset, chain_id: _chainId })
       .whereBetween('timestamp', [startTime, endTime])
       .orderBy('timestamp', 'desc')
       .first();
@@ -113,7 +113,7 @@ export class TimelineOracleService {
     }
     
     // Fallback to current price
-    return this.getCurrentPrice(asset, chainId);
+    return this.getCurrentPrice(asset, _chainId);
   }
   
   /**
@@ -179,20 +179,20 @@ export class TimelineOracleService {
   }
   
   
-  /**
-   * Store price snapshot in database
-   */
-  private async _storePriceSnapshot(snapshot: PriceSnapshot): Promise<void> {
-    try {
-      await this.db('price_snapshots').insert(snapshot);
-    } catch (error: any) {
-      if (error.code === '23505') {
-        logger.debug(`Price snapshot already exists for ${snapshot.asset} at block ${snapshot.block_number}`);
-      } else {
-        logger.error('Error storing price snapshot:', error);
-      }
-    }
-  }
+  // /**
+  //  * Store price snapshot in database
+  //  */
+  // private async _storePriceSnapshot(snapshot: PriceSnapshot): Promise<void> {
+  //   try {
+  //     await this.db('price_snapshots').insert(snapshot);
+  //   } catch (error: any) {
+  //     if (error.code === '23505') {
+  //       logger.debug(`Price snapshot already exists for ${snapshot.asset} at block ${snapshot.block_number}`);
+  //     } else {
+  //       logger.error('Error storing price snapshot:', error);
+  //     }
+  //   }
+  // }
   
   /**
    * Store price in timeline table
@@ -222,12 +222,12 @@ export class TimelineOracleService {
     
     // This would implement historical price fetching
     // For now, just get current price as placeholder
-    const currentPrice = await this.getCurrentPrice(asset, chainId);
+    const currentPrice = await this.getCurrentPrice(asset, _chainId);
     
     // Store with current timestamp (in production, you'd fetch historical data)
     await this.storePriceTimeline({
       asset,
-      chain_id: chainId,
+      chain_id: _chainId,
       block_number: 0n, // Would be actual block number
       timestamp: new Date(),
       price_usd: currentPrice.toString(),

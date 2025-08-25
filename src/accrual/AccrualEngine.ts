@@ -4,19 +4,19 @@ import { CONSTANTS, AssetType } from '../config/constants';
 import { createLogger } from '../utils/logger';
 import { DropletsResult, Round, BalanceSnapshot } from '../types';
 import { ChainlinkService } from '../oracle/ChainlinkService';
-import { BalanceTracker } from '../indexer/BalanceTracker';
+// import { BalanceTracker } from '../indexer/BalanceTracker';
 
 const logger = createLogger('AccrualEngine');
 
 export class AccrualEngine {
   private db = getDb();
   private oracleService: ChainlinkService;
-  private balanceTracker: BalanceTracker;
+  // private balanceTracker: BalanceTracker;
   private ratePerUsdPerRound: bigint;
   
   constructor() {
     this.oracleService = new ChainlinkService();
-    this.balanceTracker = new BalanceTracker();
+    // this.balanceTracker = new BalanceTracker();
     this.ratePerUsdPerRound = BigInt(config.droplets.ratePerUsdPerRound);
   }
   

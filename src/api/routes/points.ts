@@ -126,8 +126,8 @@ export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
         const droplets = await accrualEngine.calculateDropletsForRange(
           address.toLowerCase(),
           asset,
-          start,
-          end
+          start || new Date(),
+          end || new Date()
         );
         
         return reply.send({

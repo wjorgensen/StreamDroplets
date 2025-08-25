@@ -1,9 +1,9 @@
-import { createPublicClient, http, Log, parseAbiItem, Block } from 'viem';
+import { createPublicClient, http, Log, Block } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
 import { CONSTANTS, ChainId, AssetType } from '../config/constants';
-import { STREAM_VAULT_ABI, CONTRACTS } from '../config/contracts';
+import { CONTRACTS } from '../config/contracts';
 import { createLogger } from '../utils/logger';
 import { ShareEvent, Cursor, Round } from '../types';
 import { EventClassifier } from './EventClassifier';
@@ -149,12 +149,12 @@ export class EventIndexer {
   private async processLogs(logs: Log[], chainId: ChainId, asset: AssetType) {
     const sortedLogs = logs.sort((a, b) => {
       if (a.blockNumber !== b.blockNumber) {
-        return Number(a.blockNumber - b.blockNumber);
+        return Number(a.blockNumber! - b.blockNumber!);
       }
       if (a.transactionIndex !== b.transactionIndex) {
-        return a.transactionIndex - b.transactionIndex;
+        return a.transactionIndex! - b.transactionIndex!;
       }
-      return a.logIndex - b.logIndex;
+      return a.logIndex! - b.logIndex!;
     });
     
     for (const log of sortedLogs) {
@@ -201,7 +201,7 @@ export class EventIndexer {
     const classification = await this.classifier.classifyTransfer(
       from,
       to,
-      log.transactionHash,
+      log.transactionHash!,
       txReceipt,
       chainId
     );
@@ -212,10 +212,10 @@ export class EventIndexer {
       address: from,
       event_type: 'transfer',
       shares_delta: (-value).toString(),
-      block: log.blockNumber,
+      block: log.blockNumber!,
       timestamp: new Date(Number(block.timestamp) * 1000),
-      tx_hash: log.transactionHash,
-      log_index: log.logIndex,
+      tx_hash: log.transactionHash!,
+      log_index: log.logIndex!,
       event_classification: classification,
       asset,
     };

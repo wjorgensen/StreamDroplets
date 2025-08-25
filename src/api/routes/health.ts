@@ -1,7 +1,6 @@
 import { FastifyPluginAsync } from 'fastify';
 import { getDb } from '../../db/connection';
 import { testConnection } from '../../db/connection';
-import { CONSTANTS } from '../../config/constants';
 
 export const healthRoutes: FastifyPluginAsync = async (fastify) => {
   const db = getDb();
@@ -10,7 +9,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /health
    * Returns service health status
    */
-  fastify.get('/', async (request, reply) => {
+  fastify.get('/', async (_request, reply) => {
     try {
       // Test database connection
       const dbHealthy = await testConnection();
@@ -71,7 +70,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /health/ready
    * Returns readiness status
    */
-  fastify.get('/ready', async (request, reply) => {
+  fastify.get('/ready', async (_request, reply) => {
     try {
       const dbHealthy = await testConnection();
       
@@ -80,7 +79,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
       }
       
       // Check if we have any rounds indexed
-      const roundCount = await db('rounds').count('* as count').first();
+      const roundCount = await db('rounds').count('* as count').first() as {count: number} | undefined;
       const hasRounds = (roundCount?.count || 0) > 0;
       
       return reply
@@ -96,7 +95,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /health/live
    * Returns liveness status
    */
-  fastify.get('/live', async (request, reply) => {
+  fastify.get('/live', async (_request, reply) => {
     return reply.send({ alive: true });
   });
 };

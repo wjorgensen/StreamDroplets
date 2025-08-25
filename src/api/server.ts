@@ -44,7 +44,7 @@ export async function createServer() {
   await fastify.register(healthRoutes, { prefix: '/api/v1/health' });
   
   // Error handler
-  fastify.setErrorHandler((error, request, reply) => {
+  fastify.setErrorHandler((error, _request, reply) => {
     logger.error('Request error:', error);
     reply.status(error.statusCode || 500).send({
       error: error.message || 'Internal Server Error',
