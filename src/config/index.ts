@@ -69,7 +69,7 @@ function loadConfig(): Config {
       port: parseInt(process.env.DB_PORT || '5432'),
       name: process.env.DB_NAME || 'stream_droplets',
       user: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD || 'postgres',
+      password: process.env.DB_PASSWORD || '',
     },
     rpc: {
       ethereum: process.env.ALCHEMY_ETH_RPC || 'https://eth-mainnet.g.alchemy.com/v2/demo',

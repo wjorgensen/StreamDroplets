@@ -111,7 +111,7 @@ export class TimelineIndexer {
     
     // Get or create cursor
     const cursor = await this.getCursor(chainId, contractAddress);
-    let currentBlock = cursor.last_safe_block;
+    let currentBlock = BigInt(cursor.last_safe_block);
     
     logger.info(`Starting timeline indexer for ${asset} on chain ${chainId} from block ${currentBlock}`);
     
@@ -141,6 +141,7 @@ export class TimelineIndexer {
         
       } catch (error) {
         logger.error(`Error indexing chain ${chainId}:`, error);
+        console.error('Full indexer error:', error);
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
@@ -199,14 +200,44 @@ export class TimelineIndexer {
     // Cast log to include topics for event processing
     const logWithTopics = log as Log & { topics: readonly `0x${string}`[] };
     
+    const eventSignature = logWithTopics.topics[0];
+    
     // ERC-20 Transfer event: topics[1] = from, topics[2] = to
-    if (logWithTopics.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
+    if (eventSignature === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
       if (logWithTopics.topics[1]) addresses.push('0x' + logWithTopics.topics[1].slice(26));
       if (logWithTopics.topics[2]) addresses.push('0x' + logWithTopics.topics[2].slice(26));
     }
     
-    // Stake event: first topic is usually the staker
-    if (logWithTopics.topics[1]) {
+    // OFTReceived event: OFTReceived(bytes32 indexed guid, uint32 indexed srcEid, address indexed to, uint256 amountReceived)
+    // Event signature: 0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c
+    if (eventSignature === '0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c') {
+      // topics[3] = to address (recipient)
+      if (logWithTopics.topics[3]) addresses.push('0x' + logWithTopics.topics[3].slice(26));
+    }
+    
+    // OFTSent event: OFTSent(bytes32 indexed guid, uint32 indexed dstEid, address indexed from, uint256 amountSent)  
+    // Event signature: 0xfff873bb909b73d08a8c1af4b21779e87103bb8ea8cf3b3a0067eb8526b8b80a
+    if (eventSignature === '0xfff873bb909b73d08a8c1af4b21779e87103bb8ea8cf3b3a0067eb8526b8b80a') {
+      // topics[3] = from address (sender)
+      if (logWithTopics.topics[3]) addresses.push('0x' + logWithTopics.topics[3].slice(26));
+    }
+    
+    // Stake event: Stake(address indexed account, uint256 amount, uint256 round)
+    // Event signature: 0x5af417134f72a9d41143ace85b0a26dce6f550f894f2cbc1eeee8810603d91b6
+    if (eventSignature === '0x5af417134f72a9d41143ace85b0a26dce6f550f894f2cbc1eeee8810603d91b6') {
+      // topics[1] = staker address
+      if (logWithTopics.topics[1]) addresses.push('0x' + logWithTopics.topics[1].slice(26));
+    }
+    
+    // Unstake event: Unstake(address indexed account, uint256 amount, uint256 round)
+    // Event signature: 0xf960dbf9e5d0682f7a298ed974e33a28b4464914b7a2bfac12ae419a9afeb280
+    if (eventSignature === '0xf960dbf9e5d0682f7a298ed974e33a28b4464914b7a2bfac12ae419a9afeb280') {
+      // topics[1] = unstaker address
+      if (logWithTopics.topics[1]) addresses.push('0x' + logWithTopics.topics[1].slice(26));
+    }
+    
+    // Fallback: if we have any indexed address in topics[1]
+    if (!addresses.length && logWithTopics.topics[1]) {
       addresses.push('0x' + logWithTopics.topics[1].slice(26));
     }
     

@@ -106,7 +106,8 @@ export class EventClassifier {
     if (txReceipt.logs) {
       const hasOFTEvent = txReceipt.logs.some((log: any) => {
         // Check for OFTSent event topic
-        const oftSentTopic = '0x' + 'e1b87c47fdeb4f9cbadbca9df3af7aba453bb6e501075d0440d88125b711522a';
+        // OFTSent(bytes32,uint32,address,uint256)
+        const oftSentTopic = '0xfff873bb909b73d08a8c1af4b21779e87103bb8ea8cf3b3a0067eb8526b8b80a';
         return log.topics && log.topics[0] === oftSentTopic;
       });
       
@@ -129,7 +130,8 @@ export class EventClassifier {
     // Check for OFTReceived event in the logs
     const hasOFTReceived = txReceipt.logs.some((log: any) => {
       // OFTReceived event topic
-      const oftReceivedTopic = '0x' + 'efa289a0b1dacee39da97554c6a6891e5b1a82564ca35f6b810fbc7f844beee7';
+      // OFTReceived(bytes32,uint32,address,uint256)
+      const oftReceivedTopic = '0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c';
       return log.topics && log.topics[0] === oftReceivedTopic;
     });
     
