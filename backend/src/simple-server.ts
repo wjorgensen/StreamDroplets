@@ -6,7 +6,7 @@ import { Client } from 'pg';
 console.log('Starting Stream Droplets API Server...');
 console.log('Environment:', {
   NODE_ENV: process.env.NODE_ENV,
-  PORT: process.env.PORT || 3000,
+  PORT: process.env.PORT || 8080,
   HAS_DATABASE_URL: !!process.env.DATABASE_URL,
 });
 
@@ -101,7 +101,7 @@ async function startServer() {
     await app.register(eventsRoutes, { prefix: '/api/v1/events' });
     await app.register(roundsRoutes, { prefix: '/api/v1/rounds' });
 
-    const port = Number(process.env.PORT || 3000);
+    const port = Number(process.env.PORT || 8080);
     const host = '0.0.0.0'; // Required for Railway
 
     await app.listen({ port, host });

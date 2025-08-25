@@ -16,11 +16,11 @@ console.log('- RAILWAY_ENVIRONMENT:', process.env.RAILWAY_ENVIRONMENT || 'NOT SE
 // Check for DATABASE_URL pattern
 if (process.env.DATABASE_URL) {
   if (process.env.DATABASE_URL.includes('.railway.internal')) {
-    console.error('\n❌ ERROR: Using internal DATABASE_URL!');
-    console.error('Internal URLs only work for service-to-service communication.');
-    console.error('You need the public URL for database migrations and initial setup.');
+    console.log('\n✅ Using Railway internal DATABASE_URL (optimized for service-to-service)');
   } else if (process.env.DATABASE_URL.includes('.railway.app')) {
     console.log('\n✅ Using public Railway DATABASE_URL');
+  } else {
+    console.log('\n✅ DATABASE_URL is set');
   }
 }
 
@@ -47,9 +47,18 @@ console.log('\nStarting server...');
 
 const { spawn } = require('child_process');
 
-// Use node to run the compiled JavaScript file
-// Make sure the TypeScript has been compiled to dist/ during build
-const server = spawn('node', ['dist/simple-server.js'], {
+// Determine which script to run based on environment
+let scriptPath = 'dist/simple-server.js'; // Default simple server
+
+if (process.env.DEPLOY_MODE === 'full' || process.env.RUN_FULL_DEPLOY === 'true') {
+  scriptPath = 'dist/scripts/production-deploy.js';
+  console.log('\n🚀 Running FULL deployment with backfill and indexer');
+} else {
+  console.log('\n📦 Running simple API server only');
+  console.log('Set DEPLOY_MODE=full or RUN_FULL_DEPLOY=true for full deployment');
+}
+
+const server = spawn('node', [scriptPath], {
   stdio: 'inherit',
   env: process.env
 });

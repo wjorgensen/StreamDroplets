@@ -21,7 +21,9 @@
       "envVars": {
         "NODE_ENV": "production",
         "ETH_START_BLOCK": "20000000",
-        "SONIC_START_BLOCK": "40000000"
+        "SONIC_START_BLOCK": "40000000",
+        "DEPLOY_MODE": "full",
+        "PORT": "8080"
       }
     }
   ]
