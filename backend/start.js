@@ -47,8 +47,9 @@ console.log('\nStarting server...');
 
 const { spawn } = require('child_process');
 
-// Use tsx to run the TypeScript file
-const server = spawn('npx', ['tsx', 'scripts/railway-simple.ts'], {
+// Use node to run the compiled JavaScript file
+// Make sure the TypeScript has been compiled to dist/ during build
+const server = spawn('node', ['dist/simple-server.js'], {
   stdio: 'inherit',
   env: process.env
 });
