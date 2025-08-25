@@ -4,30 +4,16 @@ echo "==================================="
 echo "Railway Build Script"
 echo "==================================="
 
-# Check if we're in backend directory or root
-if [ -f "package.json" ] && [ -d "backend" ]; then
-  echo "Running from root directory"
-  # Install dependencies from root
-  echo "Installing dependencies..."
-  npm ci
-  
-  # Move to backend directory
-  cd backend
-elif [ -f "package.json" ] && [ -d "src" ]; then
-  echo "Running from backend directory"
-  # Install dependencies
-  echo "Installing dependencies..."
-  npm ci
-else
-  echo "ERROR: Unable to determine project structure"
-  exit 1
-fi
+# When Railway uses backend as root, we're already in the backend directory
+echo "Running from backend directory (Railway root)"
+
+# Install dependencies
+echo "Installing dependencies..."
+npm ci
 
 # Build TypeScript
 echo "Building TypeScript..."
-if [ -f "../node_modules/.bin/tsc" ]; then
-  ../node_modules/.bin/tsc
-elif [ -f "node_modules/.bin/tsc" ]; then
+if [ -f "node_modules/.bin/tsc" ]; then
   node_modules/.bin/tsc
 else
   npx --no-install tsc
@@ -36,9 +22,7 @@ fi
 # Also compile scripts directory if it exists
 if [ -d "scripts" ]; then
   echo "Compiling scripts..."
-  if [ -f "../node_modules/.bin/tsc" ]; then
-    ../node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
-  elif [ -f "node_modules/.bin/tsc" ]; then
+  if [ -f "node_modules/.bin/tsc" ]; then
     node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
   else
     npx --no-install tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
