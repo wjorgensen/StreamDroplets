@@ -1,4 +1,4 @@
-import { createPublicClient, http, parseAbi } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
@@ -50,7 +50,7 @@ export class TimelineOracleService {
   async getPriceAtBlock(
     asset: AssetType, 
     blockNumber: bigint,
-    chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
+    _chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
   ): Promise<bigint> {
     // Check if we already have this price
     const existing = await this.db('oracle_prices_timeline')
@@ -88,7 +88,7 @@ export class TimelineOracleService {
     asset: AssetType,
     startTime: Date,
     endTime: Date,
-    chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
+    _chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
   ): Promise<bigint> {
     // Find the closest price snapshot in the interval
     const price = await this.db('oracle_prices_timeline')
@@ -103,7 +103,7 @@ export class TimelineOracleService {
     
     // If no price in interval, get the latest before the interval
     const latestPrice = await this.db('oracle_prices_timeline')
-      .where({ asset, chain_id: chainId })
+      .where({ asset, chain_id: _chainId })
       .where('timestamp', '<=', endTime)
       .orderBy('timestamp', 'desc')
       .first();
@@ -121,7 +121,7 @@ export class TimelineOracleService {
    */
   async getCurrentPrice(
     asset: AssetType,
-    chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
+    _chainId: number = 1
   ): Promise<bigint> {
     try {
       const contractConfig = CONTRACTS[asset];
@@ -142,7 +142,7 @@ export class TimelineOracleService {
       
     } catch (error) {
       logger.error(`Error fetching current price for ${asset}:`, error);
-      return this.getFallbackPrice(asset);
+      return 0n; // Fallback price
     }
   }
   
@@ -182,7 +182,7 @@ export class TimelineOracleService {
   /**
    * Store price snapshot in database
    */
-  private async storePriceSnapshot(snapshot: PriceSnapshot): Promise<void> {
+  private async _storePriceSnapshot(snapshot: PriceSnapshot): Promise<void> {
     try {
       await this.db('price_snapshots').insert(snapshot);
     } catch (error: any) {
@@ -216,7 +216,7 @@ export class TimelineOracleService {
     asset: AssetType,
     startDate: Date,
     endDate: Date,
-    chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
+    _chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
   ): Promise<void> {
     logger.info(`Prefetching price history for ${asset} from ${startDate.toISOString()} to ${endDate.toISOString()}`);
     

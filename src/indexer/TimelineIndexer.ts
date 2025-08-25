@@ -1,9 +1,9 @@
-import { createPublicClient, http, Log, parseAbiItem, Block } from 'viem';
+import { createPublicClient, http, Log, Block } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
 import { CONSTANTS, ChainId, AssetType } from '../config/constants';
-import { STREAM_VAULT_ABI, CONTRACTS } from '../config/contracts';
+import { CONTRACTS } from '../config/contracts';
 import { createLogger } from '../utils/logger';
 import { TimelineOracleService } from '../oracle/TimelineOracleService';
 
@@ -163,7 +163,7 @@ export class TimelineIndexer {
     });
     
     // Sort logs by block and transaction
-    const sortedLogs = logs.sort((a, b) => {
+    const sortedLogs = logs.sort((a: any, b: any) => {
       if (a.blockNumber !== b.blockNumber) {
         return Number(a.blockNumber - b.blockNumber);
       }
@@ -220,9 +220,9 @@ export class TimelineIndexer {
     const eventTime = new Date(Number(block.timestamp) * 1000);
     
     // Get current state at this address
-    const currentBalance = await this.getBalanceAtBlock(address, asset, chainId, log.blockNumber);
-    const currentPPS = await this.getPPSAtBlock(asset, chainId, log.blockNumber);
-    const currentPrice = await this.oracleService.getPriceAtBlock(asset, log.blockNumber, chainId);
+    const currentBalance = await this.getBalanceAtBlock(address, asset, chainId, log.blockNumber!);
+    const currentPPS = await this.getPPSAtBlock(asset, chainId, log.blockNumber!);
+    const currentPrice = await this.oracleService.getPriceAtBlock(asset, log.blockNumber!, chainId);
     
     // Close any open intervals for this address
     await this.closeOpenIntervals(address, asset, eventTime);
@@ -255,10 +255,10 @@ export class TimelineIndexer {
   }
   
   private async getBalanceAtBlock(
-    address: string,
-    asset: AssetType,
-    chainId: ChainId,
-    blockNumber: bigint
+    _address: string,
+    _asset: AssetType,
+    _chainId: ChainId,
+    _blockNumber: bigint
   ): Promise<bigint> {
     // This would query the current balance table or calculate from events
     // For now, return a placeholder
@@ -266,9 +266,9 @@ export class TimelineIndexer {
   }
   
   private async getPPSAtBlock(
-    asset: AssetType,
-    chainId: ChainId,
-    blockNumber: bigint
+    _asset: AssetType,
+    _chainId: ChainId,
+    _blockNumber: bigint
   ): Promise<bigint> {
     // This would query the rounds table for the PPS at this block
     // For now, return a placeholder

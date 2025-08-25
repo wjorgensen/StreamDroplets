@@ -1,8 +1,8 @@
-import { createPublicClient, http, parseAbi } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
-import { CONSTANTS, AssetType } from '../config/constants';
+import { AssetType } from '../config/constants';
 import { CHAINLINK_AGGREGATOR_ABI, CONTRACTS } from '../config/contracts';
 import { createLogger } from '../utils/logger';
 import { OraclePrice, Round } from '../types';
@@ -74,7 +74,7 @@ export class ChainlinkService {
         functionName: 'latestRoundData',
       });
       
-      const [roundId, answer, startedAt, updatedAt, answeredInRound] = latestData as [
+      const [_roundId, answer, _startedAt, updatedAt, _answeredInRound] = latestData as [
         bigint,
         bigint,
         bigint,
@@ -104,7 +104,7 @@ export class ChainlinkService {
   /**
    * Finds the closest Chainlink round before a given block
    */
-  private async findClosestRound(
+  private async _findClosestRound(
     aggregatorAddress: `0x${string}`,
     targetBlock: bigint
   ): Promise<bigint> {

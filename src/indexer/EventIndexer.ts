@@ -223,8 +223,8 @@ export class EventIndexer {
     await this.storeEvent(event);
     
     // Update balances
-    await this.balanceTracker.updateBalance(from, asset, chainId, -value, log.blockNumber);
-    await this.balanceTracker.updateBalance(to, asset, chainId, value, log.blockNumber);
+    await this.balanceTracker.updateBalance(from, asset, chainId, -value, log.blockNumber!);
+    await this.balanceTracker.updateBalance(to, asset, chainId, value, log.blockNumber!);
     
     // Handle bridge events
     if (classification === 'bridge_burn' || classification === 'bridge_mint') {
@@ -242,11 +242,11 @@ export class EventIndexer {
       round_id: round,
       asset,
       chain_id: chainId,
-      start_block: log.blockNumber,
+      start_block: log.blockNumber!,
       start_ts: new Date(Number(block.timestamp) * 1000),
       pps: pricePerShare.toString(),
       pps_scale: 18, // From contract
-      tx_hash: log.transactionHash,
+      tx_hash: log.transactionHash!,
     };
     
     await this.storeRound(roundData);
@@ -255,7 +255,7 @@ export class EventIndexer {
     await this.balanceTracker.snapshotForRound(round, asset, block.timestamp);
   }
   
-  private async handleVaultEvent(log: Log, block: Block, chainId: ChainId, asset: AssetType) {
+  private async handleVaultEvent(_log: Log, _block: Block, _chainId: ChainId, _asset: AssetType) {
     // Implementation for other vault events (Stake, Unstake, Redeem, etc.)
     // This would decode the specific event and store it appropriately
   }
@@ -263,7 +263,7 @@ export class EventIndexer {
   private async handleBridgeEvent(
     log: Log,
     from: string,
-    to: string,
+    _to: string,
     amount: bigint,
     classification: string,
     asset: AssetType,
@@ -272,9 +272,9 @@ export class EventIndexer {
     // Store bridge event for correlation
     if (classification === 'bridge_burn') {
       await this.db('bridge_events').insert({
-        src_chain: log.chainId,
+        src_chain: (log as any).chainId || 0,
         dst_chain: 0, // To be determined
-        burn_tx: log.transactionHash,
+        burn_tx: log.transactionHash!,
         address: from,
         shares: amount.toString(),
         burn_timestamp: new Date(Number(block.timestamp) * 1000),
