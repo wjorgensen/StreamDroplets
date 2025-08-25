@@ -22,7 +22,8 @@
     "api": "tsx src/api/server.ts",
     "frontend": "cd frontend && npm run dev",
     "backfill": "tsx scripts/backfill.ts",
-    "validate": "tsx scripts/validate.ts"
+    "validate": "tsx scripts/validate.ts",
+    "test:db": "tsx scripts/test-db.ts"
   },
   "keywords": [
     "stream",
