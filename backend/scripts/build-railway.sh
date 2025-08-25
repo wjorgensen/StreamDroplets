@@ -4,17 +4,23 @@ echo "==================================="
 echo "Railway Build Script"
 echo "==================================="
 
-# Install dependencies
+# Move to root directory for monorepo installation
+cd ..
+
+# Install dependencies from root (monorepo)
 echo "Installing dependencies..."
-npm install
+npm ci
+
+# Move back to backend directory
+cd backend
 
 # Build TypeScript
 echo "Building TypeScript..."
-npx tsc
+npx --no-install tsc || ../node_modules/.bin/tsc
 
 # Also compile scripts directory
 echo "Compiling scripts..."
-npx tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
+npx --no-install tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true || ../node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
 
 # Remove any .d.ts files that might cause issues
 find dist -name "*.d.ts" -type f -delete
