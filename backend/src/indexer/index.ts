@@ -1,5 +1,5 @@
 import { createPublicClient, http, Address, parseAbiItem } from 'viem';
-import { mainnet, sonic } from 'viem/chains';
+import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
@@ -33,8 +33,24 @@ class LiveIndexer {
     const sonicRpcUrl = 'https://rpc.soniclabs.com';
     logger.info(`Using Sonic RPC: ${sonicRpcUrl}`);
     
+    // Define Sonic chain manually
+    const sonicChain = {
+      id: 146,
+      name: 'Sonic',
+      network: 'sonic',
+      nativeCurrency: {
+        decimals: 18,
+        name: 'Sonic',
+        symbol: 'S',
+      },
+      rpcUrls: {
+        default: { http: [sonicRpcUrl] },
+        public: { http: [sonicRpcUrl] },
+      },
+    };
+    
     this.sonicClient = createPublicClient({
-      chain: sonic,
+      chain: sonicChain as any,
       transport: http(sonicRpcUrl, {
         retryCount: 3,
         retryDelay: 1000,
@@ -43,30 +59,44 @@ class LiveIndexer {
   }
 
   async initialize() {
-    // Get the last indexed block from database
-    const lastEth = await this.db('current_balances')
-      .where('chain_id', 1)
-      .max('last_update_block as max_block')
-      .first();
-    
-    const lastSonic = await this.db('current_balances')
-      .where('chain_id', 146)
-      .max('last_update_block as max_block')
-      .first();
-    
-    this.lastEthBlock = BigInt(lastEth?.max_block || 0);
-    this.lastSonicBlock = BigInt(lastSonic?.max_block || 0);
-    
-    // If no data, start from recent blocks
-    if (this.lastEthBlock === 0n) {
-      this.lastEthBlock = await this.ethClient.getBlockNumber() - 100n;
+    try {
+      // Get the last indexed block from database
+      const lastEth = await this.db('current_balances')
+        .where('chain_id', 1)
+        .max('last_update_block as max_block')
+        .first();
+      
+      const lastSonic = await this.db('current_balances')
+        .where('chain_id', 146)
+        .max('last_update_block as max_block')
+        .first();
+      
+      this.lastEthBlock = BigInt(lastEth?.max_block || 0);
+      this.lastSonicBlock = BigInt(lastSonic?.max_block || 0);
+      
+      logger.info(`Database last blocks - Ethereum: ${this.lastEthBlock}, Sonic: ${this.lastSonicBlock}`);
+      
+      // If no data, start from recent blocks
+      if (this.lastEthBlock === 0n) {
+        const currentBlock = await this.ethClient.getBlockNumber();
+        this.lastEthBlock = currentBlock - 100n;
+        logger.info(`No Ethereum history, starting from block ${this.lastEthBlock}`);
+      }
+      if (this.lastSonicBlock === 0n) {
+        const currentBlock = await this.sonicClient.getBlockNumber();
+        this.lastSonicBlock = currentBlock - 100n;
+        logger.info(`No Sonic history, starting from block ${this.lastSonicBlock}`);
+      }
+      
+      logger.info(`Starting from Ethereum block: ${this.lastEthBlock}`);
+      logger.info(`Starting from Sonic block: ${this.lastSonicBlock}`);
+    } catch (error: any) {
+      logger.error('Error initializing indexer:', {
+        error: error?.message || 'Unknown error',
+        stack: error?.stack || 'No stack trace'
+      });
+      throw error;
     }
-    if (this.lastSonicBlock === 0n) {
-      this.lastSonicBlock = await this.sonicClient.getBlockNumber() - 100n;
-    }
-    
-    logger.info(`Starting from Ethereum block: ${this.lastEthBlock}`);
-    logger.info(`Starting from Sonic block: ${this.lastSonicBlock}`);
   }
 
   async processEthereumBlocks() {
@@ -183,12 +213,13 @@ class LiveIndexer {
           }
         } catch (error: any) {
           logger.error(`Error processing ${token.symbol} on Ethereum:`, {
-            error: error.message,
-            stack: error.stack,
+            error: error?.message || 'Unknown error',
+            stack: error?.stack || 'No stack trace',
             token: token.symbol,
             address: token.ethereum,
             fromBlock: fromBlock.toString(),
-            toBlock: toBlock.toString()
+            toBlock: toBlock.toString(),
+            fullError: JSON.stringify(error)
           });
         }
       }
@@ -197,8 +228,9 @@ class LiveIndexer {
       this.lastEthBlock = toBlock;
     } catch (error: any) {
       logger.error('Error processing Ethereum blocks:', {
-        error: error.message,
-        stack: error.stack
+        error: error?.message || 'Unknown error',
+        stack: error?.stack || 'No stack trace',
+        fullError: JSON.stringify(error)
       });
     }
   }
@@ -276,12 +308,13 @@ class LiveIndexer {
           }
         } catch (error: any) {
           logger.error(`Error processing ${token.symbol} on Sonic:`, {
-            error: error.message,
-            stack: error.stack,
+            error: error?.message || 'Unknown error',
+            stack: error?.stack || 'No stack trace',
             token: token.symbol,
             address: token.sonic,
             fromBlock: fromBlock.toString(),
-            toBlock: toBlock.toString()
+            toBlock: toBlock.toString(),
+            fullError: JSON.stringify(error)
           });
         }
       }
@@ -290,8 +323,9 @@ class LiveIndexer {
       this.lastSonicBlock = toBlock;
     } catch (error: any) {
       logger.error('Error processing Sonic blocks:', {
-        error: error.message,
-        stack: error.stack
+        error: error?.message || 'Unknown error',
+        stack: error?.stack || 'No stack trace',
+        fullError: JSON.stringify(error)
       });
     }
   }
@@ -305,6 +339,8 @@ class LiveIndexer {
     blockNumber: number,
     txHash?: string
   ) {
+    logger.debug(`Processing transfer: ${token} on chain ${chainId}, from ${from} to ${to}, value: ${value.toString()}, block: ${blockNumber}`);
+    
     // Use database transaction for atomicity
     await this.db.transaction(async (trx) => {
       // Update sender balance
@@ -336,6 +372,7 @@ class LiveIndexer {
               last_update_block: blockNumber,
               updated_at: trx.fn.now(),
             });
+          logger.debug(`Updated balance for sender ${from}: ${newBalance.toString()} ${token}`);
         } else {
           // Log negative balance warning - this shouldn't happen
           logger.warn(`Negative balance detected for ${from} in ${token}:`, {
@@ -375,6 +412,7 @@ class LiveIndexer {
             last_update_block: blockNumber,
             updated_at: trx.fn.now(),
           });
+        logger.debug(`Updated balance for receiver ${to}: ${newBalance.toString()} ${token}`);
       }
     });
   }
