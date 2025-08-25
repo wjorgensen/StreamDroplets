@@ -54,8 +54,17 @@ const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 
 function loadConfig(): Config {
+  // If DATABASE_URL is set, ignore individual DB_* variables
   const config = {
-    database: {
+    database: process.env.DATABASE_URL ? {
+      // Use dummy values when DATABASE_URL is set since they won't be used
+      host: 'using-database-url',
+      port: 5432,
+      name: 'using-database-url',
+      user: 'using-database-url',
+      password: 'using-database-url',
+    } : {
+      // Only use individual variables if DATABASE_URL is not set
       host: process.env.DB_HOST || 'localhost',
       port: parseInt(process.env.DB_PORT || '5432'),
       name: process.env.DB_NAME || 'stream_droplets',

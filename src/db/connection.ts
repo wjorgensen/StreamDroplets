@@ -5,10 +5,11 @@ let db: Knex | null = null;
 
 export function getDb(): Knex {
   if (!db) {
-    // Support Railway's DATABASE_URL or individual config
-    let connection: any = process.env.DATABASE_URL;
+    // ALWAYS use DATABASE_URL if it exists, regardless of other variables
+    let connection: any;
     
-    if (connection) {
+    if (process.env.DATABASE_URL) {
+      console.log('Using DATABASE_URL for connection');
       // Railway PostgreSQL requires SSL
       if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
         connection = {
@@ -17,9 +18,13 @@ export function getDb(): Knex {
             rejectUnauthorized: false
           }
         };
+      } else {
+        // Development mode - use DATABASE_URL directly
+        connection = process.env.DATABASE_URL;
       }
     } else {
-      // Fallback to individual config
+      console.log('No DATABASE_URL found, using individual config');
+      // Only use individual config if DATABASE_URL doesn't exist
       connection = {
         host: config.database.host,
         port: config.database.port,
