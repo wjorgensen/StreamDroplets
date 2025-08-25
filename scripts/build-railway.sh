@@ -19,23 +19,8 @@ npm install
 npm run build
 cd ..
 
-# Run migrations if DATABASE_URL is set
-if [ ! -z "$DATABASE_URL" ]; then
-  echo "DATABASE_URL is set, attempting migrations..."
-  
-  # Check if it's an internal URL
-  if [[ "$DATABASE_URL" == *".railway.internal"* ]]; then
-    echo "WARNING: DATABASE_URL uses internal URL, migrations might fail"
-    echo "Skipping migrations - they should run at startup instead"
-  else
-    echo "Running database migrations..."
-    npx knex migrate:latest --knexfile dist/db/knexfile.js --env production || {
-      echo "Migration failed, but continuing build..."
-      echo "Migrations will be attempted at startup"
-    }
-  fi
-else
-  echo "DATABASE_URL not set, skipping migrations"
-fi
+# Skip migrations during build - Railway uses internal URL during build
+echo "Skipping migrations during build (will run at startup)"
+echo "Note: Railway provides internal DATABASE_URL during build which doesn't work for migrations"
 
 echo "Build complete!"

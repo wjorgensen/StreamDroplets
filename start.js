@@ -24,6 +24,24 @@ if (process.env.DATABASE_URL) {
   }
 }
 
+// Run migrations first (if DATABASE_URL is set)
+if (process.env.DATABASE_URL) {
+  console.log('\nRunning database migrations...');
+  const { execSync } = require('child_process');
+  
+  try {
+    // Try to run migrations
+    execSync('npx knex migrate:latest --knexfile dist/db/knexfile.js --env production', {
+      stdio: 'inherit',
+      env: process.env
+    });
+    console.log('✅ Migrations completed successfully');
+  } catch (error) {
+    console.error('⚠️  Migration failed (non-fatal):', error.message);
+    console.log('Continuing with server startup...');
+  }
+}
+
 // Try to start the server
 console.log('\nStarting server...');
 

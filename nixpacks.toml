@@ -1,0 +1,9 @@
+# Specify Node.js version for Railway
+[phases.setup]
+nixPkgs = ["nodejs_20", "npm-9_x"]
+
+[phases.build]
+cmds = ["./scripts/build-railway.sh"]
+
+[start]
+cmd = "node start.js"

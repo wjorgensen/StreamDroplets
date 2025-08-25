@@ -27,6 +27,10 @@
     "test:db": "tsx scripts/test-db.ts",
     "debug:railway": "tsx scripts/railway-debug.ts"
   },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
   "keywords": [
     "stream",
     "droplets",
