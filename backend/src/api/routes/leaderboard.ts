@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-// import { AccrualEngine } from '../../accrual/AccrualEngine';
+import { AccrualEngine } from '../../accrual/AccrualEngine';
 import { createLogger } from '../../utils/logger';
 import { getDb } from '../../db/connection';
 
@@ -12,7 +12,7 @@ const querySchema = z.object({
 });
 
 export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
-  // const accrualEngine = new AccrualEngine();
+  const accrualEngine = new AccrualEngine();
   
   /**
    * GET /leaderboard
@@ -28,33 +28,65 @@ export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       
-      // For now, get data from current_balances since droplets_cache isn't populated
-      const db = getDb();
-      const results = await db('current_balances')
-        .select('address')
-        .sum('shares as total_shares')
-        .groupBy('address')
-        .orderBy('total_shares', 'desc')
-        .limit(limit);
+      // Use AccrualEngine to get proper leaderboard with exclusions
+      const leaderboardData = await accrualEngine.getLeaderboard(limit);
       
-      const leaderboard = results.map((row, index) => ({
-        rank: index + 1,
-        address: row.address,
-        droplets: row.total_shares,
-        breakdown: {
-          xETH: '0',
-          xBTC: '0',
-          xUSD: '0',
-          xEUR: '0',
-        }
-      }));
+      // If no data from AccrualEngine, fall back to filtered current_balances
+      if (leaderboardData.length === 0) {
+        const db = getDb();
+        
+        // Get excluded addresses
+        const excludedAddresses = await db('excluded_addresses').pluck('address');
+        
+        const results = await db('current_balances')
+          .select('address')
+          .sum('shares as total_shares')
+          .whereNotIn('address', excludedAddresses)
+          .groupBy('address')
+          .orderBy('total_shares', 'desc')
+          .limit(limit);
+        
+        const leaderboard = results.map((row, index) => ({
+          rank: index + 1,
+          address: row.address,
+          droplets: row.total_shares,
+          breakdown: {
+            xETH: '0',
+            xBTC: '0',
+            xUSD: '0',
+            xEUR: '0',
+          }
+        }));
+        
+        return reply.send({
+          data: leaderboard,
+          pagination: {
+            limit,
+            offset,
+            total: leaderboard.length,
+          },
+        });
+      }
+      
+      // Format the AccrualEngine data
+      const formattedLeaderboard = await Promise.all(
+        leaderboardData.map(async (item) => {
+          const dropletData = await accrualEngine.calculateDroplets(item.address);
+          return {
+            rank: item.rank,
+            address: item.address,
+            droplets: item.droplets,
+            breakdown: dropletData.breakdown,
+          };
+        })
+      );
       
       return reply.send({
-        data: leaderboard,
+        data: formattedLeaderboard,
         pagination: {
           limit,
           offset,
-          total: leaderboard.length,
+          total: formattedLeaderboard.length,
         },
       });
     } catch (error) {

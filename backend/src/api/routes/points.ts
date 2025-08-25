@@ -11,7 +11,9 @@ const paramsSchema = z.object({
 });
 
 export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
-  const accrualEngine = new TimelineAccrualEngine();
+  // Use the regular AccrualEngine, not Timeline
+  const AccrualEngine = require('../../accrual/AccrualEngine').AccrualEngine;
+  const accrualEngine = new AccrualEngine();
   
   /**
    * GET /points/:address
@@ -23,38 +25,30 @@ export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
       
       logger.info(`Getting droplets for ${address}`);
       
-      // For now, get data from current_balances
-      const db = getDb();
-      const balances = await db('current_balances')
-        .where('address', address.toLowerCase())
-        .select('asset', 'shares');
+      // Use AccrualEngine to calculate actual droplets
+      const dropletResult = await accrualEngine.calculateDroplets(address.toLowerCase());
       
-      if (balances.length === 0) {
-        return reply.status(404).send({
-          error: 'Address not found',
-        });
+      // If no droplets and no balances, return 404
+      if (dropletResult.droplets === '0') {
+        const db = getDb();
+        const hasAnyActivity = await db('current_balances')
+          .where('address', address.toLowerCase())
+          .first();
+        
+        if (!hasAnyActivity) {
+          const hasSnapshots = await db('balance_snapshots')
+            .where('address', address.toLowerCase())
+            .first();
+          
+          if (!hasSnapshots) {
+            return reply.status(404).send({
+              error: 'Address not found',
+            });
+          }
+        }
       }
       
-      const breakdown: any = {
-        xETH: '0',
-        xBTC: '0',
-        xUSD: '0',
-        xEUR: '0',
-      };
-      
-      let total = 0n;
-      for (const balance of balances) {
-        breakdown[balance.asset] = balance.shares;
-        total += BigInt(balance.shares);
-      }
-      
-      const result = {
-        address: address.toLowerCase(),
-        droplets: total.toString(),
-        breakdown,
-      };
-      
-      return reply.send(result);
+      return reply.send(dropletResult);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return reply.status(400).send({

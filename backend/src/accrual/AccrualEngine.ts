@@ -24,6 +24,23 @@ export class AccrualEngine {
    * Calculates total droplets for an address across all assets
    */
   async calculateDroplets(address: string): Promise<DropletsResult> {
+    // Check if address is excluded
+    const isExcluded = await this.isExcludedAddress(address);
+    if (isExcluded) {
+      logger.info(`Address ${address} is excluded from droplet calculations`);
+      return {
+        address,
+        droplets: '0',
+        lastUpdated: new Date(),
+        breakdown: {
+          xETH: '0',
+          xBTC: '0',
+          xUSD: '0',
+          xEUR: '0',
+        },
+      };
+    }
+    
     const assets: AssetType[] = ['xETH', 'xBTC', 'xUSD', 'xEUR'];
     const breakdown: Record<string, string> = {};
     let totalDroplets = 0n;
@@ -208,13 +225,27 @@ export class AccrualEngine {
   }
   
   /**
+   * Checks if an address is excluded from droplet calculations
+   */
+  private async isExcludedAddress(address: string): Promise<boolean> {
+    const excluded = await this.db('excluded_addresses')
+      .where('address', address.toLowerCase())
+      .first();
+    
+    return !!excluded;
+  }
+  
+  /**
    * Gets leaderboard of top addresses by droplets
    */
   async getLeaderboard(limit: number = 100): Promise<any[]> {
-    // Get all cached droplets grouped by address
+    // Get all cached droplets grouped by address, excluding excluded addresses
+    const excludedAddresses = await this.db('excluded_addresses').pluck('address');
+    
     const results = await this.db('droplets_cache')
       .select('address')
       .sum('droplets_total as total_droplets')
+      .whereNotIn('address', excludedAddresses)
       .groupBy('address')
       .orderBy('total_droplets', 'desc')
       .limit(limit);

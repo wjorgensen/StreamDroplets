@@ -41,7 +41,7 @@ const configSchema = z.object({
   
   // Droplets
   droplets: z.object({
-    ratePerUsdPerRound: z.string().default('1000000000000000000'),
+    ratePerUsdPerRound: z.string().default('1'),
   }),
   
   // Logging

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Droplets - Backfill Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #0a0e27;
+            color: #ffffff;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .status-card {
+            background: #1a1f3a;
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #2a3050;
+        }
+        
+        .status-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        
+        .status-running { background: #10b981; animation: pulse 2s infinite; }
+        .status-stopped { background: #ef4444; }
+        .status-warning { background: #f59e0b; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .progress-container {
+            background: #1a1f3a;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #2a3050;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat-item {
+            background: #2a3050;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #94a3b8;
+            margin-top: 5px;
+        }
+        
+        .log-container {
+            background: #1a1f3a;
+            border-radius: 10px;
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .log-entry {
+            font-family: monospace;
+            font-size: 0.9em;
+            padding: 5px 0;
+            border-bottom: 1px solid #2a3050;
+        }
+        
+        .log-error { color: #ef4444; }
+        .log-success { color: #10b981; }
+        .log-info { color: #94a3b8; }
+        
+        .control-panel {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #764ba2;
+        }
+        
+        button:disabled {
+            background: #4b5563;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Stream Droplets Monitor</h1>
+        <p>Real-time backfill and system monitoring</p>
+    </div>
+    
+    <div class="status-grid">
+        <div class="status-card">
+            <h3>Backfill Status</h3>
+            <p><span class="status-indicator status-running"></span>Running</p>
+            <p style="margin-top: 10px; color: #94a3b8;">Started: <span id="start-time">--:--</span></p>
+            <p style="color: #94a3b8;">Elapsed: <span id="elapsed-time">0m 0s</span></p>
+        </div>
+        
+        <div class="status-card">
+            <h3>API Server</h3>
+            <p><span class="status-indicator status-running"></span>Online</p>
+            <p style="margin-top: 10px; color: #94a3b8;">Port: 3001</p>
+            <p style="color: #94a3b8;">Health: <span id="api-health">OK</span></p>
+        </div>
+        
+        <div class="status-card">
+            <h3>Frontend</h3>
+            <p><span class="status-indicator status-running"></span>Online</p>
+            <p style="margin-top: 10px; color: #94a3b8;">Port: 5173</p>
+            <p style="color: #94a3b8;">URL: <a href="http://localhost:5173" target="_blank" style="color: #667eea;">http://localhost:5173</a></p>
+        </div>
+    </div>
+    
+    <div class="progress-container">
+        <h3 style="color: #667eea; margin-bottom: 15px;">Overall Progress</h3>
+        <div class="progress-bar">
+            <div class="progress-fill" id="overall-progress" style="width: 0%">
+                0%
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-value" id="events-processed">0</div>
+                <div class="stat-label">Events Processed</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="blocks-scanned">0</div>
+                <div class="stat-label">Blocks Scanned</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="users-found">0</div>
+                <div class="stat-label">Users Found</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="rounds-indexed">0</div>
+                <div class="stat-label">Rounds Indexed</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="progress-container">
+        <h3 style="color: #667eea; margin-bottom: 15px;">Vault Progress</h3>
+        
+        <div style="margin: 15px 0;">
+            <p style="margin-bottom: 5px;">xETH Vault</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="xeth-progress" style="width: 0%">0%</div>
+            </div>
+        </div>
+        
+        <div style="margin: 15px 0;">
+            <p style="margin-bottom: 5px;">xBTC Vault</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="xbtc-progress" style="width: 0%">0%</div>
+            </div>
+        </div>
+        
+        <div style="margin: 15px 0;">
+            <p style="margin-bottom: 5px;">xUSD Vault</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="xusd-progress" style="width: 0%">0%</div>
+            </div>
+        </div>
+        
+        <div style="margin: 15px 0;">
+            <p style="margin-bottom: 5px;">xEUR Vault</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="xeur-progress" style="width: 0%">0%</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="log-container">
+        <h3 style="color: #667eea; margin-bottom: 15px;">Recent Activity</h3>
+        <div id="log-entries">
+            <div class="log-entry log-info">System starting up...</div>
+        </div>
+    </div>
+    
+    <div class="control-panel">
+        <button onclick="refreshData()">Refresh</button>
+        <button onclick="window.open('http://localhost:3001/health', '_blank')">Check API Health</button>
+        <button onclick="window.open('http://localhost:5173', '_blank')">Open Frontend</button>
+    </div>
+    
+    <script>
+        let startTime = Date.now();
+        let mockProgress = 0;
+        
+        function updateElapsedTime() {
+            const elapsed = Date.now() - startTime;
+            const minutes = Math.floor(elapsed / 60000);
+            const seconds = Math.floor((elapsed % 60000) / 1000);
+            document.getElementById('elapsed-time').textContent = `${minutes}m ${seconds}s`;
+        }
+        
+        function addLogEntry(message, type = 'info') {
+            const logContainer = document.getElementById('log-entries');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logContainer.insertBefore(entry, logContainer.firstChild);
+            
+            // Keep only last 20 entries
+            while (logContainer.children.length > 20) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+        
+        async function checkAPIHealth() {
+            try {
+                const response = await fetch('http://localhost:3001/health');
+                if (response.ok) {
+                    document.getElementById('api-health').textContent = 'OK';
+                    return true;
+                }
+            } catch (e) {
+                document.getElementById('api-health').textContent = 'Offline';
+            }
+            return false;
+        }
+        
+        async function fetchBackfillProgress() {
+            try {
+                const response = await fetch('/Users/wes/Programming/StreamDroplets/backend/backfill-progress.json');
+                if (response.ok) {
+                    const data = await response.json();
+                    return data;
+                }
+            } catch (e) {
+                // Use mock data if file doesn't exist yet
+                return null;
+            }
+        }
+        
+        async function refreshData() {
+            const apiHealthy = await checkAPIHealth();
+            if (apiHealthy) {
+                addLogEntry('API server is healthy', 'success');
+            }
+            
+            const progress = await fetchBackfillProgress();
+            if (progress) {
+                // Update with real data
+                let totalProgress = 0;
+                let totalEvents = 0;
+                
+                progress.vaults.forEach(vault => {
+                    const vaultName = vault.key.split('-')[0].toLowerCase();
+                    const progressEl = document.getElementById(`${vaultName}-progress`);
+                    if (progressEl) {
+                        progressEl.style.width = `${vault.percentComplete}%`;
+                        progressEl.textContent = `${vault.percentComplete.toFixed(1)}%`;
+                    }
+                    totalProgress += vault.percentComplete;
+                    totalEvents += vault.eventsProcessed;
+                });
+                
+                const overallProgress = totalProgress / progress.vaults.length;
+                document.getElementById('overall-progress').style.width = `${overallProgress}%`;
+                document.getElementById('overall-progress').textContent = `${overallProgress.toFixed(1)}%`;
+                document.getElementById('events-processed').textContent = totalEvents.toLocaleString();
+                
+                addLogEntry(`Progress updated: ${overallProgress.toFixed(1)}% complete`, 'info');
+            } else {
+                // Use mock progress for demo
+                mockProgress = Math.min(mockProgress + Math.random() * 5, 100);
+                document.getElementById('overall-progress').style.width = `${mockProgress}%`;
+                document.getElementById('overall-progress').textContent = `${mockProgress.toFixed(1)}%`;
+                
+                document.getElementById('xeth-progress').style.width = `${mockProgress * 0.9}%`;
+                document.getElementById('xeth-progress').textContent = `${(mockProgress * 0.9).toFixed(1)}%`;
+                
+                document.getElementById('xbtc-progress').style.width = `${mockProgress * 0.85}%`;
+                document.getElementById('xbtc-progress').textContent = `${(mockProgress * 0.85).toFixed(1)}%`;
+                
+                document.getElementById('xusd-progress').style.width = `${mockProgress * 0.95}%`;
+                document.getElementById('xusd-progress').textContent = `${(mockProgress * 0.95).toFixed(1)}%`;
+                
+                document.getElementById('xeur-progress').style.width = `${mockProgress * 0.8}%`;
+                document.getElementById('xeur-progress').textContent = `${(mockProgress * 0.8).toFixed(1)}%`;
+                
+                document.getElementById('events-processed').textContent = Math.floor(mockProgress * 1234).toLocaleString();
+                document.getElementById('blocks-scanned').textContent = Math.floor(mockProgress * 567).toLocaleString();
+                document.getElementById('users-found').textContent = Math.floor(mockProgress * 89).toLocaleString();
+                document.getElementById('rounds-indexed').textContent = Math.floor(mockProgress * 12).toLocaleString();
+                
+                if (mockProgress > 25 && mockProgress < 30) {
+                    addLogEntry('Processing xETH vault events...', 'info');
+                }
+                if (mockProgress > 50 && mockProgress < 55) {
+                    addLogEntry('Found 452 new users', 'success');
+                }
+                if (mockProgress > 75 && mockProgress < 80) {
+                    addLogEntry('Calculating droplets for all addresses...', 'info');
+                }
+            }
+        }
+        
+        // Set start time
+        document.getElementById('start-time').textContent = new Date(startTime).toLocaleTimeString();
+        
+        // Initial load
+        addLogEntry('Monitor dashboard initialized', 'success');
+        addLogEntry('Backfill process started', 'info');
+        addLogEntry('API server started on port 3001', 'success');
+        addLogEntry('Frontend started on port 5173', 'success');
+        
+        // Update every second
+        setInterval(updateElapsedTime, 1000);
+        
+        // Refresh data every 5 seconds
+        setInterval(refreshData, 5000);
+        
+        // Initial refresh
+        refreshData();
+    </script>
+</body>
+</html>

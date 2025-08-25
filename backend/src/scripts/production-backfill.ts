@@ -3,27 +3,27 @@ import { mainnet, sonic } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
 
-// Token configurations - use environment variables with fallbacks
+// Token configurations - use environment variables
 const TOKENS = [
   { 
     symbol: 'xETH', 
-    ethereum: process.env.XETH_ETHEREUM_ADDRESS || '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153', 
-    sonic: process.env.XETH_SONIC_ADDRESS || '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6' 
+    ethereum: process.env.XETH_VAULT_ETH || '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153', 
+    sonic: process.env.XETH_VAULT_SONIC || '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6' 
   },
   { 
     symbol: 'xBTC', 
-    ethereum: process.env.XBTC_ETHEREUM_ADDRESS || '0x1aB7348741E7BA04a8c6163E852F3D7a1E4C8398', 
-    sonic: process.env.XBTC_SONIC_ADDRESS || '0x8B659bBb68f43ea3eeCA37c8d929Dd842f2Af5b6' 
+    ethereum: process.env.XBTC_VAULT_ETH || '0x12fd502e2052CaFB41eccC5B596023d9978057d6', 
+    sonic: process.env.XBTC_VAULT_SONIC || '0xB88fF15ae5f82c791e637b27337909BcF8065270' 
   },
   { 
     symbol: 'xUSD', 
-    ethereum: process.env.XUSD_ETHEREUM_ADDRESS || '0xEc1B5fF451C1De3235587cEc997C33491D22C73e', 
-    sonic: process.env.XUSD_SONIC_ADDRESS || '0xBAfB50128a6A7B8247C88e9Cc3516cb3a2268E1d' 
+    ethereum: process.env.XUSD_VAULT_ETH || '0xE2Fc85BfB48C4cF147921fBE110cf92Ef9f26F94', 
+    sonic: process.env.XUSD_VAULT_SONIC || '0x6202B9f02E30E5e1c62Cc01E4305450E5d83b926' 
   },
   { 
     symbol: 'xEUR', 
-    ethereum: process.env.XEUR_ETHEREUM_ADDRESS || '0x45a87c78073eF2FB837b853763B96bd1Cd893BcC', 
-    sonic: process.env.XEUR_SONIC_ADDRESS || '0xf2F013133DE2F0d3369A6BE96B92aFdD0bDC2Da8' 
+    ethereum: process.env.XEUR_VAULT_ETH || '0xc15697f61170Fc3Bb4e99Eb7913b4C7893F64F13', 
+    sonic: process.env.XEUR_VAULT_SONIC || '0x931383c1bCA6a41E931f2519BAe8D716857F156c' 
   },
 ];
 
