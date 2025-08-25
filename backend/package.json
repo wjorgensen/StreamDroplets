@@ -6,23 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "build:railway": "npm install && npm run build && npm run db:migrate:prod",
     "start": "node start.js",
-    "start:simple": "node dist/simple-server.js",
-    "start:full": "node dist/scripts/production-deploy.js",
-    "cli": "tsx src/cli/index.ts",
-    "cli:prod": "node dist/cli/index.js",
-    "db:migrate": "knex migrate:latest --knexfile src/db/knexfile.ts",
     "db:migrate:prod": "knex migrate:latest --knexfile dist/db/knexfile.js --env production",
-    "db:rollback": "knex migrate:rollback --knexfile src/db/knexfile.ts",
-    "db:seed": "knex seed:run --knexfile src/db/knexfile.ts",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit",
-    "indexer:start": "tsx src/cli/index.ts indexer start",
-    "indexer:status": "tsx src/cli/index.ts indexer status",
-    "api": "tsx src/api/server.ts",
-    "backfill": "tsx src/cli/index.ts backfill run",
-    "droplets": "tsx src/cli/index.ts droplets"
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20.0.0",
