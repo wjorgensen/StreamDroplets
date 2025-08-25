@@ -5,26 +5,10 @@
     "buildCommand": "chmod +x scripts/build-railway.sh && ./scripts/build-railway.sh"
   },
   "deploy": {
-    "startCommand": "node start-simple.js",
+    "startCommand": "node dist/scripts/railway-simple.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
     "healthcheckPath": "/api/v1/health",
     "healthcheckTimeout": 90
-  },
-  "services": [
-    {
-      "name": "api",
-      "source": ".",
-      "builder": "NIXPACKS",
-      "buildCommand": "npm run build:railway",
-      "startCommand": "npm run start:prod",
-      "envVars": {
-        "NODE_ENV": "production",
-        "ETH_START_BLOCK": "20000000",
-        "SONIC_START_BLOCK": "40000000",
-        "DEPLOY_MODE": "full",
-        "PORT": "8080"
-      }
-    }
-  ]
+  }
 }
