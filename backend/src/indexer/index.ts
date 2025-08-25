@@ -102,30 +102,80 @@ class LiveIndexer {
             toBlock,
           });
           
-          // Process transfers
+          // Process transfers with validation
           for (const transfer of transfers) {
-            await this.processTransfer(
-              transfer.args.from,
-              transfer.args.to,
-              transfer.args.value,
-              token.symbol,
-              1,
-              Number(transfer.blockNumber)
-            );
+            // Validate event data exists
+            if (!transfer.args || !transfer.args.from || !transfer.args.to || transfer.args.value === undefined) {
+              logger.warn(`Invalid transfer event for ${token.symbol}:`, { 
+                blockNumber: transfer.blockNumber,
+                transactionHash: transfer.transactionHash
+              });
+              continue;
+            }
+            
+            // Retry logic for individual transfers
+            let retryCount = 0;
+            const maxRetries = 3;
+            while (retryCount < maxRetries) {
+              try {
+                await this.processTransfer(
+                  transfer.args.from,
+                  transfer.args.to,
+                  transfer.args.value,
+                  token.symbol,
+                  1,
+                  Number(transfer.blockNumber),
+                  transfer.transactionHash
+                );
+                break; // Success, exit retry loop
+              } catch (err: any) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                  logger.error(`Failed to process transfer after ${maxRetries} retries:`, {
+                    token: token.symbol,
+                    from: transfer.args.from,
+                    to: transfer.args.to,
+                    value: transfer.args.value.toString(),
+                    error: err.message
+                  });
+                } else {
+                  await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                }
+              }
+            }
           }
           
-          // Process PPS updates as rounds
+          // Process PPS updates as rounds with proper idempotency
           for (const pps of ppsEvents) {
-            await this.db('rounds').insert({
-              round_id: Date.now(), // Use timestamp as unique ID
-              asset: token.symbol,
-              chain_id: 1,
-              start_block: Number(pps.blockNumber),
-              start_ts: new Date(),
-              pps: pps.args.pricePerShare.toString(),
-              pps_scale: 18,
-              tx_hash: pps.transactionHash,
-            }).onConflict(['round_id', 'asset', 'chain_id']).merge();
+            // Validate PPS event data
+            if (!pps.args || !pps.args.pricePerShare) {
+              logger.warn(`Invalid PPS event for ${token.symbol}:`, {
+                blockNumber: pps.blockNumber,
+                transactionHash: pps.transactionHash
+              });
+              continue;
+            }
+            
+            // Use block number + asset as unique identifier for idempotency
+            const roundId = `${pps.blockNumber}_${token.symbol}_${1}`;
+            
+            try {
+              await this.db('rounds').insert({
+                round_id: roundId,
+                asset: token.symbol,
+                chain_id: 1,
+                start_block: Number(pps.blockNumber),
+                start_ts: new Date(),
+                pps: pps.args.pricePerShare.toString(),
+                pps_scale: 18,
+                tx_hash: pps.transactionHash,
+              }).onConflict(['round_id', 'asset', 'chain_id']).ignore(); // Ignore duplicates
+            } catch (err: any) {
+              logger.error(`Failed to insert round for ${token.symbol}:`, {
+                roundId,
+                error: err.message
+              });
+            }
           }
           
           if (transfers.length > 0 || ppsEvents.length > 0) {
@@ -178,16 +228,47 @@ class LiveIndexer {
             toBlock,
           });
           
-          // Process transfers
+          // Process transfers with validation
           for (const transfer of transfers) {
-            await this.processTransfer(
-              transfer.args.from,
-              transfer.args.to,
-              transfer.args.value,
-              token.symbol,
-              146,
-              Number(transfer.blockNumber)
-            );
+            // Validate event data exists
+            if (!transfer.args || !transfer.args.from || !transfer.args.to || transfer.args.value === undefined) {
+              logger.warn(`Invalid transfer event for ${token.symbol} on Sonic:`, { 
+                blockNumber: transfer.blockNumber,
+                transactionHash: transfer.transactionHash
+              });
+              continue;
+            }
+            
+            // Retry logic for individual transfers
+            let retryCount = 0;
+            const maxRetries = 3;
+            while (retryCount < maxRetries) {
+              try {
+                await this.processTransfer(
+                  transfer.args.from,
+                  transfer.args.to,
+                  transfer.args.value,
+                  token.symbol,
+                  146,
+                  Number(transfer.blockNumber),
+                  transfer.transactionHash
+                );
+                break; // Success, exit retry loop
+              } catch (err: any) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                  logger.error(`Failed to process Sonic transfer after ${maxRetries} retries:`, {
+                    token: token.symbol,
+                    from: transfer.args.from,
+                    to: transfer.args.to,
+                    value: transfer.args.value.toString(),
+                    error: err.message
+                  });
+                } else {
+                  await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                }
+              }
+            }
           }
           
           if (transfers.length > 0) {
@@ -221,26 +302,68 @@ class LiveIndexer {
     value: bigint,
     token: string,
     chainId: number,
-    blockNumber: number
+    blockNumber: number,
+    txHash?: string
   ) {
-    // Update sender balance
-    if (from !== '0x0000000000000000000000000000000000000000') {
-      const existing = await this.db('current_balances')
-        .where({ 
-          address: from.toLowerCase(), 
-          asset: token, 
-          chain_id: chainId 
-        })
-        .first();
+    // Use database transaction for atomicity
+    await this.db.transaction(async (trx) => {
+      // Update sender balance
+      if (from !== '0x0000000000000000000000000000000000000000') {
+        const existing = await trx('current_balances')
+          .where({ 
+            address: from.toLowerCase(), 
+            asset: token, 
+            chain_id: chainId 
+          })
+          .first();
       
       const newBalance = existing 
         ? BigInt(existing.shares) - value
         : -value;
       
-      if (newBalance > 0n) {
-        await this.db('current_balances')
+        if (newBalance >= 0n) {
+          await trx('current_balances')
+            .insert({
+              address: from.toLowerCase(),
+              asset: token,
+              chain_id: chainId,
+              shares: newBalance.toString(),
+              last_update_block: blockNumber,
+            })
+            .onConflict(['address', 'asset', 'chain_id'])
+            .merge({
+              shares: newBalance.toString(),
+              last_update_block: blockNumber,
+              updated_at: trx.fn.now(),
+            });
+        } else {
+          // Log negative balance warning - this shouldn't happen
+          logger.warn(`Negative balance detected for ${from} in ${token}:`, {
+            balance: newBalance.toString(),
+            blockNumber,
+            chainId,
+            txHash
+          });
+        }
+      }
+    
+      // Update receiver balance
+      if (to !== '0x0000000000000000000000000000000000000000') {
+        const existing = await trx('current_balances')
+          .where({ 
+            address: to.toLowerCase(), 
+            asset: token, 
+            chain_id: chainId 
+          })
+          .first();
+      
+      const newBalance = existing 
+        ? BigInt(existing.shares) + value
+        : value;
+      
+        await trx('current_balances')
           .insert({
-            address: from.toLowerCase(),
+            address: to.toLowerCase(),
             asset: token,
             chain_id: chainId,
             shares: newBalance.toString(),
@@ -250,49 +373,10 @@ class LiveIndexer {
           .merge({
             shares: newBalance.toString(),
             last_update_block: blockNumber,
-            updated_at: this.db.fn.now(),
+            updated_at: trx.fn.now(),
           });
-      } else {
-        // Remove if balance is 0 or negative
-        await this.db('current_balances')
-          .where({ 
-            address: from.toLowerCase(), 
-            asset: token, 
-            chain_id: chainId 
-          })
-          .delete();
       }
-    }
-    
-    // Update receiver balance
-    if (to !== '0x0000000000000000000000000000000000000000') {
-      const existing = await this.db('current_balances')
-        .where({ 
-          address: to.toLowerCase(), 
-          asset: token, 
-          chain_id: chainId 
-        })
-        .first();
-      
-      const newBalance = existing 
-        ? BigInt(existing.shares) + value
-        : value;
-      
-      await this.db('current_balances')
-        .insert({
-          address: to.toLowerCase(),
-          asset: token,
-          chain_id: chainId,
-          shares: newBalance.toString(),
-          last_update_block: blockNumber,
-        })
-        .onConflict(['address', 'asset', 'chain_id'])
-        .merge({
-          shares: newBalance.toString(),
-          last_update_block: blockNumber,
-          updated_at: this.db.fn.now(),
-        });
-    }
+    });
   }
 
   async start() {
