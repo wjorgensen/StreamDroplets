@@ -169,7 +169,6 @@ async function main() {
   logger.info('Environment:', {
     NODE_ENV: process.env.NODE_ENV,
     DATABASE_URL: process.env.DATABASE_URL ? 'Set' : 'Not set',
-    RAILWAY: !!process.env.RAILWAY_ENVIRONMENT,
   });
   
   // Test database connection

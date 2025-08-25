@@ -10,8 +10,8 @@ export function getDb(): Knex {
     
     if (process.env.DATABASE_URL) {
       console.log('Using DATABASE_URL for connection');
-      // Railway PostgreSQL requires SSL
-      if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+      // Production PostgreSQL requires SSL
+      if (process.env.NODE_ENV === 'production') {
         connection = {
           connectionString: process.env.DATABASE_URL,
           ssl: {
@@ -37,7 +37,6 @@ export function getDb(): Knex {
     console.log('Database connection config:', {
       hasDATABASE_URL: !!process.env.DATABASE_URL,
       isProduction: process.env.NODE_ENV === 'production',
-      isRailway: !!process.env.RAILWAY_ENVIRONMENT,
       connectionType: typeof connection,
       // Log connection string pattern without sensitive data
       connectionPattern: process.env.DATABASE_URL 
@@ -52,7 +51,7 @@ export function getDb(): Knex {
         min: 2,
         max: 10,
       },
-      // Add connection timeout for Railway
+      // Connection timeout
       acquireConnectionTimeout: 60000,
     });
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Simplified start script for Railway deployment
+ * Start script for the API server
  * Focuses on getting the API server running quickly
  */
 

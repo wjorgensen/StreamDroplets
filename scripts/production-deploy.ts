@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
-import { createLogger } from '../utils/logger';
-import { getDb } from '../db/connection';
+import { createLogger } from '../src/utils/logger';
+import { getDb } from '../src/db/connection';
 
 const logger = createLogger('Production-Deploy');
 
@@ -125,7 +125,6 @@ async function main() {
     logger.info('🚀 Starting Stream Droplets Full Production Deployment...');
     logger.info('Environment:', {
       NODE_ENV: process.env.NODE_ENV,
-      RAILWAY: !!process.env.RAILWAY_ENVIRONMENT,
       PORT: process.env.PORT || 8080,
     });
     

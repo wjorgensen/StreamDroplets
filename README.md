@@ -1,60 +1,145 @@
-# Stream Droplets Points Tracker
+# Stream Droplets Tracker
 
-A deterministic, auditable points tracking system for Stream Protocol vaults using round-based accounting with USD-denominated rewards across Ethereum and Sonic chains.
-
-## Project Structure
-
-This is a monorepo containing:
-- `/backend` - Node.js API server and blockchain indexer
-- `/frontend` - React web application
-
-For Railway deployment, set the root directory to `/backend`.
+A production-ready blockchain indexing and points calculation system for the Stream Protocol. This system tracks user interactions with StreamVault contracts across Ethereum and Sonic chains, calculating droplet rewards based on USD exposure.
 
 ## Overview
 
-The Stream Droplets tracker indexes vault activity, calculates points ("droplets") based on USD exposure, and provides a REST API for querying balances and leaderboards. The system uses a round-based approach where users earn points for holding shares at round start, with exclusions for withdrawal rounds.
+Stream Droplets is a reward system where users earn points (droplets) for providing liquidity to StreamVault contracts. The system:
+- Tracks all stake, unstake, and redeem events across multiple chains
+- Calculates USD value of positions using Chainlink price oracles
+- Awards droplets at a rate of **1 droplet per $1 USD exposure per round**
+- Excludes users who unstake during a round to prevent gaming
+- Provides real-time APIs for querying droplet balances and leaderboards
 
-### Key Features
-
-- **Round-based accounting**: No per-second calculations, snapshots at round boundaries
-- **USD-denominated fairness**: All assets (xETH, xBTC, xUSD, xEUR) earn at the same rate per dollar
-- **Transfer neutrality**: Mid-round transfers don't affect current round earnings
-- **Deterministic calculations**: Recomputing from genesis produces identical results
-- **Multi-chain support**: Indexes Ethereum and Sonic with bridge correlation
-- **Chainlink oracle integration**: USD prices fetched at round boundaries
-
-## Architecture
+## System Architecture
 
 ### Core Components
 
-1. **Event Indexer**: Monitors vault contracts and classifies events
-2. **Balance Tracker**: Maintains user balances and creates snapshots
-3. **Oracle Service**: Fetches Chainlink prices at round boundaries
-4. **Accrual Engine**: Calculates droplets using round-based logic
-5. **REST API**: Provides endpoints for points, leaderboards, and audit trails
+1. **Indexer Service** - Real-time blockchain event monitoring with automatic failover
+2. **Accrual Engine** - Droplet calculation based on USD exposure
+3. **API Server** - RESTful endpoints for data access
+4. **Backfill Service** - Historical data reconstruction
+5. **Database Layer** - PostgreSQL for persistent storage
 
-### Earning Logic
+### How Droplets Are Calculated
 
-Users earn droplets for round `r` if and only if:
-- They held shares at `round_start_timestamp`
-- They did NOT unstake to assets during round `r`
+Each round (24 hours), users earn droplets based on their USD exposure:
 
-Formula: `droplets = shares × PPS × USD_price × rate_per_round`
+1. **Share Calculation**: System tracks shares held at round start
+2. **Unstaking Check**: Users who unstake during a round are excluded (bridge mitigation)
+3. **USD Conversion**: Shares converted to USD using Chainlink price feeds
+4. **Droplet Award**: 1 droplet per $1 USD per round
+5. **Result Caching**: Calculations cached for performance
 
-## Quick Start
+### Bridge Mitigation
+
+To prevent exploitation through bridging:
+- Users who perform ANY unstaking action during a round receive 0 droplets for that round
+- This includes partial unstakes, instant unstakes, and redemptions
+- Ensures users maintain consistent exposure throughout the round
+
+## API Endpoints
+
+### Public Endpoints
+
+#### GET `/api/v1/points/:address`
+Get droplet balance for an address
+```json
+{
+  "address": "0x...",
+  "total_droplets": "1234.56",
+  "rounds_participated": 10,
+  "last_updated": "2024-01-15T12:00:00Z"
+}
+```
+
+#### GET `/api/v1/leaderboard`
+Top addresses by droplet count
+```json
+{
+  "leaderboard": [
+    {
+      "rank": 1,
+      "address": "0x...",
+      "total_droplets": "5678.90",
+      "rounds_participated": 15
+    }
+  ],
+  "total_participants": 1234
+}
+```
+
+#### GET `/api/v1/events`
+Recent blockchain events (paginated)
+```json
+{
+  "events": [
+    {
+      "type": "Stake",
+      "address": "0x...",
+      "amount": "1000.0",
+      "timestamp": "2024-01-15T12:00:00Z",
+      "chain": "ethereum",
+      "vault": "xETH"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 10000
+  }
+}
+```
+
+#### GET `/api/v1/rounds`
+Round information
+```json
+{
+  "current_round": {
+    "round_number": 30,
+    "start_time": "2024-01-15T00:00:00Z",
+    "end_time": "2024-01-16T00:00:00Z",
+    "status": "active"
+  },
+  "total_rounds": 30
+}
+```
+
+#### GET `/api/v1/health`
+System health status
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "indexers": {
+    "ethereum": "synced",
+    "sonic": "synced"
+  }
+}
+```
+
+### Admin Endpoints
+
+#### POST `/api/v1/admin/recalculate`
+Trigger droplet recalculation (requires ADMIN_API_KEY)
+
+#### POST `/api/v1/admin/backfill`
+Start historical backfill (requires ADMIN_API_KEY)
+
+## Setup Instructions
 
 ### Prerequisites
 
-- Node.js 20+
-- PostgreSQL 16+
-- Docker & Docker Compose (optional)
+- Node.js 18+ 
+- PostgreSQL 14+
+- Alchemy API keys for Ethereum and Sonic chains
 
 ### Installation
 
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd StreamDroplets
+cd stream-droplets
 ```
 
 2. Install dependencies:
@@ -62,259 +147,215 @@ cd StreamDroplets
 npm install
 ```
 
-3. Copy environment configuration:
+3. Copy environment variables:
 ```bash
 cp .env.example .env
 ```
 
-4. Update `.env` with your configuration:
-- Add Alchemy RPC URLs for Ethereum and Sonic
-- Add vault contract addresses
-- Set admin API key
+4. Configure your `.env` file with:
+   - Database credentials
+   - Alchemy API keys (at least one, preferably three for load balancing)
+   - Admin API key for protected endpoints
 
-### Using Docker
-
-Start all services with Docker Compose:
-
+5. Build the project:
 ```bash
-docker-compose up -d
+npm run build
 ```
 
-This starts PostgreSQL and the application in containers.
-
-### Manual Setup
-
-1. Start PostgreSQL:
-```bash
-# MacOS
-brew services start postgresql
-
-# Linux
-sudo systemctl start postgresql
-```
-
-2. Create database:
-```bash
-createdb stream_droplets
-```
-
-3. Run migrations:
+6. Run database migrations:
 ```bash
 npm run db:migrate
 ```
 
-4. Start the application:
+### Running the System
+
+#### Development Mode
 ```bash
+# Run API server and indexer together
 npm run dev
+
+# Or run components separately:
+npm run dev:api      # API server only
+npm run dev:indexer  # Indexer only
 ```
 
-## API Endpoints
+#### Production Mode
+```bash
+# Build first
+npm run build
 
-### Points
+# Run combined server
+npm start
 
-- `GET /points/:address` - Get total droplets and breakdown by asset
-- `GET /points/:address/:asset` - Get droplets for specific asset
+# Or use the simple start script
+node start-simple.js
+```
 
-### Leaderboard
+### CLI Commands
 
-- `GET /leaderboard?limit=100` - Get top addresses by droplets
-
-### Events
-
-- `GET /events/:address` - Get event history for an address
-- `GET /events/:address/summary` - Get event summary
-
-### Rounds
-
-- `GET /rounds/:asset` - Get round history with PPS and oracle prices
-- `GET /rounds/:asset/current` - Get current round info
-
-### Health
-
-- `GET /health` - Service health status
-- `GET /health/ready` - Readiness check
-- `GET /health/live` - Liveness check
-
-### Admin (Protected)
-
-- `POST /admin/config` - Update configuration
-- `POST /admin/recalculate` - Trigger full recalculation
-- `POST /admin/backfill` - Start historical backfill
-- `GET /admin/stats` - System statistics
-
-## Scripts
-
-### Backfill Historical Data
+The system includes a CLI for management tasks:
 
 ```bash
-npm run backfill -- --asset xETH --from 19000000 --recalculate
+# Run indexer
+npx stream-droplets indexer start
+
+# Check indexer status
+npx stream-droplets indexer status
+
+# Run historical backfill
+npx stream-droplets backfill run --chain ethereum --from-block 17000000
+
+# Calculate droplets for specific address
+npx stream-droplets droplets calculate 0x...
+
+# Run database migrations
+npx stream-droplets db migrate
 ```
-
-Options:
-- `--asset <xETH|xBTC|xUSD|xEUR>` - Specific asset to backfill
-- `--from <block>` - Starting block number
-- `--to <block>` - Ending block number
-- `--chain <1|146>` - Specific chain (1=Ethereum, 146=Sonic)
-- `--recalculate` - Recalculate all droplets after backfill
-
-### Validate System
-
-```bash
-npm run validate
-```
-
-Runs validation checks:
-- Database connectivity
-- Table existence
-- Oracle price availability
-- Round continuity
-- Balance consistency
-- Droplets determinism
 
 ## Configuration
 
 ### Environment Variables
 
-Key configuration in `.env`:
-
 ```env
-# Database
+# Database Configuration
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=stream_droplets
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
 
-# RPC Endpoints
-ALCHEMY_ETH_RPC=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
-ALCHEMY_SONIC_RPC=https://sonic-mainnet.g.alchemy.com/v2/YOUR_KEY
+# RPC Endpoints - Primary
+ALCHEMY_API_KEY_1=your_primary_key
+# Additional keys for load balancing
+ALCHEMY_API_KEY_2=your_second_key
+ALCHEMY_API_KEY_3=your_third_key
 
-# Droplets Rate
-RATE_PER_USD_PER_ROUND=1000000000000000000  # 1e18
+# API Configuration
+API_PORT=3000
+API_HOST=0.0.0.0
+API_RATE_LIMIT=100
 
-# Contract Addresses
-XETH_VAULT_ETH=0x...
-XETH_VAULT_SONIC=0x...
+# Indexer Configuration
+INDEXER_BATCH_SIZE=100
+INDEXER_POLL_INTERVAL=10000
+ETH_CONFIRMATIONS=12
+SONIC_CONFIRMATIONS=32
 
-# Chainlink Oracles
-ETH_USD_FEED=0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419
-BTC_USD_FEED=0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c
-USDC_USD_FEED=0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6
+# Droplets Configuration
+RATE_PER_USD_PER_ROUND=1  # 1 droplet per dollar per round
+
+# Admin API Key
+ADMIN_API_KEY=your_secure_admin_key
 ```
+
+### Supported Vaults
+
+**Ethereum Mainnet:**
+- xETH Vault: `0x7E586fBaF3084C0be7aB5C82C04FfD7592723153`
+- xBTC Vault: `0x12fd502e2052CaFB41eccC5B596023d9978057d6`
+- xUSD Vault: `0xE2Fc85BfB48C4cF147921fBE110cf92Ef9f26F94`
+- xEUR Vault: `0xc15697f61170Fc3Bb4e99Eb7913b4C7893F64F13`
+
+**Sonic Chain:**
+- xETH Vault: `0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6`
+- xBTC Vault: `0xB88fF15ae5f82c791e637b27337909BcF8065270`
+- xUSD Vault: `0x6202B9f02E30E5e1c62Cc01E4305450E5d83b926`
+- xEUR Vault: `0x931383c1bCA6a41E931f2519BAe8D716857F156c`
 
 ## Database Schema
 
-Key tables:
-- `rounds` - Round data with PPS from vault
-- `share_events` - All vault events with classification
-- `balance_snapshots` - User balances at round start
-- `oracle_prices` - Chainlink prices at round boundaries
-- `droplets_cache` - Cached droplets calculations
-- `bridge_events` - Cross-chain bridge correlation
+The system uses PostgreSQL with the following main tables:
 
-## Development
+- **share_events**: All vault interaction events
+- **rounds**: Round definitions with price-per-share data
+- **balance_snapshots**: User balances at round boundaries
+- **droplets_cache**: Cached droplet calculations
+- **excluded_addresses**: System and vault addresses excluded from rewards
+- **current_balances**: Real-time share balances per user
 
-### Project Structure
+## Production Features
 
-```
-src/
-├── indexer/          # Event indexing and classification
-├── accrual/          # Droplets calculation engine
-├── oracle/           # Chainlink price service
-├── api/              # REST API routes
-├── db/               # Database migrations and models
-├── config/           # Configuration and constants
-├── types/            # TypeScript type definitions
-└── utils/            # Utilities and logging
-```
+### Reliability
+- Multi-RPC endpoint failover with automatic switching
+- Exponential backoff retry logic for transient failures
+- Automatic indexer restart on critical errors
+- Database transactions for atomic updates
 
-### Running Tests
+### Performance
+- Batch processing with configurable sizes
+- Parallel event fetching across chains
+- Droplet calculation caching per round
+- Connection pooling for database efficiency
 
-```bash
-npm test                 # Run all tests
-npm run test:watch      # Watch mode
-```
+### Monitoring
+- Health check endpoints
+- Real-time indexing progress tracking
+- Error rate monitoring
+- Event emission for external monitoring systems
 
-### Type Checking
+## Security
 
-```bash
-npm run typecheck       # Check TypeScript types
-```
-
-### Linting
-
-```bash
-npm run lint           # Run ESLint
-```
-
-## Deployment
-
-### Production Build
-
-```bash
-npm run build
-```
-
-### Docker Deployment
-
-Build and run with Docker:
-
-```bash
-docker build -t stream-droplets .
-docker run -p 3000:3000 --env-file .env stream-droplets
-```
-
-### Environment Considerations
-
-- Use separate database for production
-- Configure appropriate RPC rate limits
-- Set up monitoring and alerting
-- Use secrets management for API keys
-- Configure log aggregation
-
-## Monitoring
-
-### Metrics
-
-The system exposes metrics for:
-- Indexer lag (blocks behind)
-- Events processed per second
-- API response times
-- Database query performance
-- Oracle price staleness
-
-### Health Checks
-
-- `/health` - Overall system health
-- `/health/ready` - Ready to serve requests
-- `/health/live` - Process is alive
+- Input validation using Zod schemas
+- Parameterized SQL queries to prevent injection
+- Rate limiting on all API endpoints
+- Ethereum address format validation
+- Admin endpoints protected by API key
+- No sensitive data in error responses
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Database connection errors**
-   - Check PostgreSQL is running
-   - Verify connection credentials
-   - Ensure database exists
+1. **Database Connection Failed**
+   - Verify PostgreSQL is running
+   - Check database credentials in `.env`
+   - Ensure database exists: `createdb stream_droplets`
 
-2. **RPC rate limiting**
-   - Reduce batch size in config
-   - Increase poll interval
-   - Use multiple RPC endpoints
+2. **RPC Rate Limiting**
+   - Add multiple Alchemy API keys for load balancing
+   - Adjust `INDEXER_BATCH_SIZE` and `INDEXER_POLL_INTERVAL`
 
-3. **Missing oracle prices**
-   - Check Chainlink feed addresses
-   - Verify RPC connection to Ethereum
-   - Run price validation script
+3. **Missing Historical Data**
+   - Run backfill: `npx stream-droplets backfill run`
+   - Check starting block numbers in chain config
 
-4. **Indexer lag**
-   - Check RPC performance
-   - Increase batch size if possible
-   - Monitor database performance
+4. **Droplet Calculation Issues**
+   - Verify Chainlink oracle addresses are correct
+   - Check rounds table has price data
+   - Run admin recalculation endpoint
+
+## Development
+
+### Project Structure
+```
+src/
+├── api/           # API server and routes
+├── accrual/       # Droplet calculation engine
+├── cli/           # Command-line interface
+├── config/        # Configuration and constants
+├── db/            # Database models and migrations
+├── indexer/       # Blockchain event indexing
+├── services/      # Core business logic
+├── types/         # TypeScript type definitions
+└── utils/         # Utility functions
+```
+
+### Testing
+```bash
+# Run tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Run specific test file
+npm test -- path/to/test.spec.ts
+```
 
 ## License
 
-MIT
+This project is proprietary software for Stream Protocol.
 
 ## Support
 
-For issues or questions, please open an issue on GitHub.
+For technical support or questions about the Stream Droplets system, please contact the Stream Protocol team.

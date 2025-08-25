@@ -22,7 +22,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       
-      // Basic health status - keep it simple for Railway
+      // Basic health status
       const status = {
         status: 'healthy',
         timestamp: new Date(),

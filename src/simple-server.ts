@@ -102,7 +102,7 @@ async function startServer() {
     await app.register(roundsRoutes, { prefix: '/api/v1/rounds' });
 
     const port = Number(process.env.PORT || 8080);
-    const host = '0.0.0.0'; // Required for Railway
+    const host = '0.0.0.0'; // Bind to all interfaces
 
     await app.listen({ port, host });
     
