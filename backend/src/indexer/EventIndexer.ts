@@ -170,6 +170,9 @@ export class EventIndexer {
     const client = this.clients.get(chainId);
     const block = await client.getBlock({ blockNumber: log.blockNumber });
     
+    // Cast log to include topics for event processing
+    const logWithTopics = log as Log & { topics: readonly `0x${string}`[] };
+    
     // Decode event based on topic
     const eventSignatures = {
       stake: '0x' + '9e3e0a3e7c2e0a3e7c2e0a3e7c2e0a3e7c2e0a3e7c2e0a3e7c2e0a3e7c2e0a3e', // Replace with actual
@@ -180,16 +183,16 @@ export class EventIndexer {
     };
     
     // Handle different event types
-    if (log.topics[0] === eventSignatures.transfer) {
-      await this.handleTransfer(log, block, chainId, asset);
-    } else if (log.topics[0] === eventSignatures.roundRolled) {
-      await this.handleRoundRolled(log, block, chainId, asset);
+    if (logWithTopics.topics[0] === eventSignatures.transfer) {
+      await this.handleTransfer(logWithTopics, block, chainId, asset);
+    } else if (logWithTopics.topics[0] === eventSignatures.roundRolled) {
+      await this.handleRoundRolled(logWithTopics, block, chainId, asset);
     } else {
-      await this.handleVaultEvent(log, block, chainId, asset);
+      await this.handleVaultEvent(logWithTopics, block, chainId, asset);
     }
   }
   
-  private async handleTransfer(log: Log, block: Block, chainId: ChainId, asset: AssetType) {
+  private async handleTransfer(log: Log & { topics: readonly `0x${string}`[] }, block: Block, chainId: ChainId, asset: AssetType) {
     const from = `0x${log.topics[1]?.slice(26)}`;
     const to = `0x${log.topics[2]?.slice(26)}`;
     const value = BigInt(log.data);
@@ -232,7 +235,7 @@ export class EventIndexer {
     }
   }
   
-  private async handleRoundRolled(log: Log, block: Block, chainId: ChainId, asset: AssetType) {
+  private async handleRoundRolled(log: Log & { topics: readonly `0x${string}`[] }, block: Block, chainId: ChainId, asset: AssetType) {
     // Decode RoundRolled event
     // This is a simplified version - actual implementation would decode properly
     const round = Number(log.topics[1]);
@@ -255,7 +258,7 @@ export class EventIndexer {
     await this.balanceTracker.snapshotForRound(round, asset, block.timestamp);
   }
   
-  private async handleVaultEvent(_log: Log, _block: Block, _chainId: ChainId, _asset: AssetType) {
+  private async handleVaultEvent(_log: Log & { topics: readonly `0x${string}`[] }, _block: Block, _chainId: ChainId, _asset: AssetType) {
     // Implementation for other vault events (Stake, Unstake, Redeem, etc.)
     // This would decode the specific event and store it appropriately
   }

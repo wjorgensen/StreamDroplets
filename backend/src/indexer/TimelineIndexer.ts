@@ -196,15 +196,18 @@ export class TimelineIndexer {
     // Extract addresses from log topics and data
     const addresses: string[] = [];
     
+    // Cast log to include topics for event processing
+    const logWithTopics = log as Log & { topics: readonly `0x${string}`[] };
+    
     // ERC-20 Transfer event: topics[1] = from, topics[2] = to
-    if (log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
-      if (log.topics[1]) addresses.push('0x' + log.topics[1].slice(26));
-      if (log.topics[2]) addresses.push('0x' + log.topics[2].slice(26));
+    if (logWithTopics.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
+      if (logWithTopics.topics[1]) addresses.push('0x' + logWithTopics.topics[1].slice(26));
+      if (logWithTopics.topics[2]) addresses.push('0x' + logWithTopics.topics[2].slice(26));
     }
     
     // Stake event: first topic is usually the staker
-    if (log.topics[1]) {
-      addresses.push('0x' + log.topics[1].slice(26));
+    if (logWithTopics.topics[1]) {
+      addresses.push('0x' + logWithTopics.topics[1].slice(26));
     }
     
     return [...new Set(addresses)]; // Remove duplicates

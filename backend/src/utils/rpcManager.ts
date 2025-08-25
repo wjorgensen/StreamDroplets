@@ -95,7 +95,7 @@ export class RPCManager {
       batch: {
         multicall: true,
       }
-    });
+    }) as PublicClient;
   }
   
   /**
@@ -129,7 +129,7 @@ export class RPCManager {
         batch: {
           multicall: true,
         }
-      })
+      }) as PublicClient
     );
   }
   
