@@ -11,56 +11,46 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.get('/', async (_request, reply) => {
     try {
-      // Test database connection
+      // Simple database connection test
       const dbHealthy = await testConnection();
       
-      // Get indexer status
-      const cursors = await db('cursors').select('*');
+      if (!dbHealthy) {
+        return reply.status(503).send({
+          status: 'unhealthy',
+          timestamp: new Date(),
+          database: 'disconnected',
+        });
+      }
       
-      // Get latest blocks for each chain
-      const indexerStatus = await Promise.all(
-        cursors.map(async (cursor) => {
-          const latestEvent = await db('share_events')
-            .where('chain_id', cursor.chain_id)
-            .orderBy('block', 'desc')
-            .first();
-          
-          return {
-            chain_id: cursor.chain_id,
-            contract: cursor.contract_address,
-            last_safe_block: cursor.last_safe_block,
-            last_event_block: latestEvent?.block || 0,
-            updated_at: cursor.updated_at,
-          };
-        })
-      );
-      
-      // Calculate lag
-      const now = Date.now();
-      const maxLag = Math.max(
-        ...indexerStatus.map(status => 
-          now - new Date(status.updated_at).getTime()
-        )
-      );
-      
+      // Basic health status - keep it simple for Railway
       const status = {
-        status: dbHealthy ? 'healthy' : 'unhealthy',
+        status: 'healthy',
         timestamp: new Date(),
-        database: dbHealthy ? 'connected' : 'disconnected',
-        indexer: {
-          status: maxLag < 60000 ? 'synced' : 'lagging',
-          lag_ms: maxLag,
-          chains: indexerStatus,
-        },
+        database: 'connected',
+        service: 'stream-droplets-api',
+        version: '1.0.0'
       };
       
-      return reply
-        .status(dbHealthy ? 200 : 503)
-        .send(status);
+      // Try to get basic stats if possible (but don't fail if not)
+      try {
+        const userCount = await db('current_balances')
+          .countDistinct('address as count')
+          .first()
+          .timeout(1000); // 1 second timeout
+        
+        if (userCount) {
+          (status as any).users = userCount.count || 0;
+        }
+      } catch (e) {
+        // Ignore errors getting stats
+      }
+      
+      return reply.status(200).send(status);
       
     } catch (error) {
       return reply.status(503).send({
         status: 'unhealthy',
+        timestamp: new Date(),
         error: 'Health check failed',
       });
     }
