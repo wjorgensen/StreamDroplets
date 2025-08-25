@@ -127,6 +127,16 @@ class LiveIndexer {
       
       for (const token of TOKENS) {
         try {
+          // First check if contract exists
+          const code = await this.ethClient.getBytecode({ 
+            address: token.ethereum as `0x${string}` 
+          });
+          
+          if (!code || code === '0x') {
+            logger.warn(`Contract ${token.symbol} not found at ${token.ethereum} on Ethereum, skipping...`);
+            continue;
+          }
+          
           // Get transfer events
           const transfers = await this.ethClient.getLogs({
             address: token.ethereum as Address,
@@ -263,6 +273,16 @@ class LiveIndexer {
       
       for (const token of TOKENS) {
         try {
+          // First check if contract exists
+          const code = await this.sonicClient.getBytecode({ 
+            address: token.sonic as `0x${string}` 
+          });
+          
+          if (!code || code === '0x') {
+            logger.warn(`Contract ${token.symbol} not found at ${token.sonic} on Sonic, skipping...`);
+            continue;
+          }
+          
           // Get transfer events
           const transfers = await this.sonicClient.getLogs({
             address: token.sonic as Address,
