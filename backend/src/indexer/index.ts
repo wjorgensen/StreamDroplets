@@ -5,6 +5,7 @@ import { config } from '../config';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Indexer');
+// Deploy timestamp: 2025-08-25 12:06 UTC - Force rebuild with better error logging
 
 const TOKENS = [
   { symbol: 'xETH', ethereum: '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153', sonic: '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6' },
