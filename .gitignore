@@ -33,3 +33,6 @@ coverage/
 # Frontend build
 frontend/dist/
 frontend/node_modules/
+
+.claude/
+.playwright-mcp/
