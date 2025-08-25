@@ -25,9 +25,19 @@ class LiveIndexer {
   constructor() {
     const apiKey = config.rpc.apiKeys?.[0] || process.env.ALCHEMY_API_KEY_1;
     
+    // Use public endpoints if no API key is available
+    const ethRpcUrl = apiKey 
+      ? `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`
+      : 'https://eth.llamarpc.com'; // Public RPC fallback
+    
+    logger.info(`Using Ethereum RPC: ${ethRpcUrl.includes('alchemy') ? 'Alchemy' : 'Public RPC'}`);
+    
     this.ethClient = createPublicClient({
       chain: mainnet,
-      transport: http(`https://eth-mainnet.g.alchemy.com/v2/${apiKey}`),
+      transport: http(ethRpcUrl, {
+        retryCount: 3,
+        retryDelay: 1000,
+      }),
     });
     
     // Sonic uses public RPC (Alchemy doesn't support Sonic yet)
