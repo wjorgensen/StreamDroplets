@@ -7,11 +7,28 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('Indexer');
 // Deploy timestamp: 2025-08-25 12:06 UTC - Force rebuild with better error logging
 
+// Use environment variables for contract addresses, with fallbacks to original values
 const TOKENS = [
-  { symbol: 'xETH', ethereum: '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153', sonic: '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6' },
-  { symbol: 'xBTC', ethereum: '0x1aB7348741E7BA04a8c6163E852F3D7a1E4C8398', sonic: '0x8B659bBb68f43ea3eeCA37c8d929Dd842f2Af5b6' },
-  { symbol: 'xUSD', ethereum: '0xEc1B5fF451C1De3235587cEc997C33491D22C73e', sonic: '0xBAfB50128a6A7B8247C88e9Cc3516cb3a2268E1d' },
-  { symbol: 'xEUR', ethereum: '0x45a87c78073eF2FB837b853763B96bd1Cd893BcC', sonic: '0xf2F013133DE2F0d3369A6BE96B92aFdD0bDC2Da8' },
+  { 
+    symbol: 'xETH', 
+    ethereum: process.env.XETH_ETHEREUM_ADDRESS || '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153', 
+    sonic: process.env.XETH_SONIC_ADDRESS || '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6' 
+  },
+  { 
+    symbol: 'xBTC', 
+    ethereum: process.env.XBTC_ETHEREUM_ADDRESS || '0x1aB7348741E7BA04a8c6163E852F3D7a1E4C8398', 
+    sonic: process.env.XBTC_SONIC_ADDRESS || '0x8B659bBb68f43ea3eeCA37c8d929Dd842f2Af5b6' 
+  },
+  { 
+    symbol: 'xUSD', 
+    ethereum: process.env.XUSD_ETHEREUM_ADDRESS || '0xEc1B5fF451C1De3235587cEc997C33491D22C73e', 
+    sonic: process.env.XUSD_SONIC_ADDRESS || '0xBAfB50128a6A7B8247C88e9Cc3516cb3a2268E1d' 
+  },
+  { 
+    symbol: 'xEUR', 
+    ethereum: process.env.XEUR_ETHEREUM_ADDRESS || '0x45a87c78073eF2FB837b853763B96bd1Cd893BcC', 
+    sonic: process.env.XEUR_SONIC_ADDRESS || '0xf2F013133DE2F0d3369A6BE96B92aFdD0bDC2Da8' 
+  },
 ];
 
 class LiveIndexer {
@@ -23,6 +40,12 @@ class LiveIndexer {
   private isRunning = false;
 
   constructor() {
+    // Log contract addresses being used
+    logger.info('Contract addresses configured:');
+    TOKENS.forEach(token => {
+      logger.info(`  ${token.symbol}: ETH=${token.ethereum}, Sonic=${token.sonic}`);
+    });
+    
     const apiKey = config.rpc.apiKeys?.[0] || process.env.ALCHEMY_API_KEY_1;
     
     // Use public endpoints if no API key is available
