@@ -29,9 +29,16 @@ class LiveIndexer {
       transport: http(`https://eth-mainnet.g.alchemy.com/v2/${apiKey}`),
     });
     
+    // Sonic uses public RPC (Alchemy doesn't support Sonic yet)
+    const sonicRpcUrl = 'https://rpc.soniclabs.com';
+    logger.info(`Using Sonic RPC: ${sonicRpcUrl}`);
+    
     this.sonicClient = createPublicClient({
       chain: sonic,
-      transport: http(`https://sonic-mainnet.g.alchemy.com/v2/${apiKey}`),
+      transport: http(sonicRpcUrl, {
+        retryCount: 3,
+        retryDelay: 1000,
+      }),
     });
   }
 
@@ -71,7 +78,9 @@ class LiveIndexer {
       }
       
       const fromBlock = this.lastEthBlock + 1n;
-      const toBlock = currentBlock;
+      // Limit batch size to prevent RPC errors
+      const maxBatchSize = 100n;
+      const toBlock = fromBlock + maxBatchSize > currentBlock ? currentBlock : fromBlock + maxBatchSize;
       
       logger.info(`Processing Ethereum blocks ${fromBlock} to ${toBlock}`);
       
@@ -122,14 +131,25 @@ class LiveIndexer {
           if (transfers.length > 0 || ppsEvents.length > 0) {
             logger.info(`Processed ${transfers.length} transfers and ${ppsEvents.length} PPS updates for ${token.symbol} on Ethereum`);
           }
-        } catch (error) {
-          logger.error(`Error processing ${token.symbol} on Ethereum:`, error);
+        } catch (error: any) {
+          logger.error(`Error processing ${token.symbol} on Ethereum:`, {
+            error: error.message,
+            stack: error.stack,
+            token: token.symbol,
+            address: token.ethereum,
+            fromBlock: fromBlock.toString(),
+            toBlock: toBlock.toString()
+          });
         }
       }
       
-      this.lastEthBlock = currentBlock;
-    } catch (error) {
-      logger.error('Error processing Ethereum blocks:', error);
+      // Only update if we successfully processed all tokens
+      this.lastEthBlock = toBlock;
+    } catch (error: any) {
+      logger.error('Error processing Ethereum blocks:', {
+        error: error.message,
+        stack: error.stack
+      });
     }
   }
 
@@ -142,7 +162,9 @@ class LiveIndexer {
       }
       
       const fromBlock = this.lastSonicBlock + 1n;
-      const toBlock = currentBlock;
+      // Limit batch size to prevent RPC errors
+      const maxBatchSize = 100n;
+      const toBlock = fromBlock + maxBatchSize > currentBlock ? currentBlock : fromBlock + maxBatchSize;
       
       logger.info(`Processing Sonic blocks ${fromBlock} to ${toBlock}`);
       
@@ -171,14 +193,25 @@ class LiveIndexer {
           if (transfers.length > 0) {
             logger.info(`Processed ${transfers.length} transfers for ${token.symbol} on Sonic`);
           }
-        } catch (error) {
-          logger.error(`Error processing ${token.symbol} on Sonic:`, error);
+        } catch (error: any) {
+          logger.error(`Error processing ${token.symbol} on Sonic:`, {
+            error: error.message,
+            stack: error.stack,
+            token: token.symbol,
+            address: token.sonic,
+            fromBlock: fromBlock.toString(),
+            toBlock: toBlock.toString()
+          });
         }
       }
       
-      this.lastSonicBlock = currentBlock;
-    } catch (error) {
-      logger.error('Error processing Sonic blocks:', error);
+      // Only update if we successfully processed all tokens
+      this.lastSonicBlock = toBlock;
+    } catch (error: any) {
+      logger.error('Error processing Sonic blocks:', {
+        error: error.message,
+        stack: error.stack
+      });
     }
   }
 
