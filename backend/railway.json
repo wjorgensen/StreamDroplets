@@ -2,10 +2,10 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "./scripts/build-railway.sh"
+    "buildCommand": "cd backend && chmod +x scripts/build-railway.sh && ./scripts/build-railway.sh"
   },
   "deploy": {
-    "startCommand": "node start-simple.js",
+    "startCommand": "cd backend && node start-simple.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
     "healthcheckPath": "/api/v1/health",

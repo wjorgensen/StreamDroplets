@@ -4,27 +4,52 @@ echo "==================================="
 echo "Railway Build Script"
 echo "==================================="
 
-# Move to root directory for monorepo installation
-cd ..
-
-# Install dependencies from root (monorepo)
-echo "Installing dependencies..."
-npm ci
-
-# Move back to backend directory
-cd backend
+# Check if we're in backend directory or root
+if [ -f "package.json" ] && [ -d "backend" ]; then
+  echo "Running from root directory"
+  # Install dependencies from root
+  echo "Installing dependencies..."
+  npm ci
+  
+  # Move to backend directory
+  cd backend
+elif [ -f "package.json" ] && [ -d "src" ]; then
+  echo "Running from backend directory"
+  # Install dependencies
+  echo "Installing dependencies..."
+  npm ci
+else
+  echo "ERROR: Unable to determine project structure"
+  exit 1
+fi
 
 # Build TypeScript
 echo "Building TypeScript..."
-npx --no-install tsc || ../node_modules/.bin/tsc
+if [ -f "../node_modules/.bin/tsc" ]; then
+  ../node_modules/.bin/tsc
+elif [ -f "node_modules/.bin/tsc" ]; then
+  node_modules/.bin/tsc
+else
+  npx --no-install tsc
+fi
 
-# Also compile scripts directory
-echo "Compiling scripts..."
-npx --no-install tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true || ../node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
+# Also compile scripts directory if it exists
+if [ -d "scripts" ]; then
+  echo "Compiling scripts..."
+  if [ -f "../node_modules/.bin/tsc" ]; then
+    ../node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
+  elif [ -f "node_modules/.bin/tsc" ]; then
+    node_modules/.bin/tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
+  else
+    npx --no-install tsc scripts/*.ts --outDir dist/scripts --module commonjs --target ES2022 --esModuleInterop true
+  fi
+fi
 
 # Remove any .d.ts files that might cause issues
-find dist -name "*.d.ts" -type f -delete
-find dist -name "*.d.ts.map" -type f -delete
+if [ -d "dist" ]; then
+  find dist -name "*.d.ts" -type f -delete 2>/dev/null || true
+  find dist -name "*.d.ts.map" -type f -delete 2>/dev/null || true
+fi
 
 # Skip migrations during build - Railway uses internal URL during build
 echo "Skipping migrations during build (will run at startup)"
