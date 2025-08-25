@@ -1,4 +1,4 @@
-import { createPublicClient, http, Address, parseAbiItem, Log } from 'viem';
+import { createPublicClient, http, Address, parseAbiItem } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
@@ -303,10 +303,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processStakeEvents(events: Log[], asset: string, chainId: number) {
+  private async processStakeEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       // Skip excluded addresses
       if (isExcludedAddress(account)) continue;
@@ -327,10 +327,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processUnstakeEvents(events: Log[], asset: string, chainId: number) {
+  private async processUnstakeEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       // Skip excluded addresses
       if (isExcludedAddress(account)) continue;
@@ -359,10 +359,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processRedeemEvents(events: Log[], asset: string, chainId: number) {
+  private async processRedeemEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, share, round } = event.args as any;
+      const { account, share, round } = event.args;
       
       // Skip excluded addresses
       if (isExcludedAddress(account)) continue;
@@ -382,10 +382,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processInstantUnstakeEvents(events: Log[], asset: string, chainId: number) {
+  private async processInstantUnstakeEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       // Skip excluded addresses
       if (isExcludedAddress(account)) continue;
@@ -406,10 +406,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processRoundRollEvents(events: Log[], asset: string, chainId: number) {
+  private async processRoundRollEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { round, pricePerShare, sharesMinted, wrappedTokensMinted, wrappedTokensBurned, yield: yieldAmount, isYieldPositive } = event.args as any;
+      const { round, pricePerShare, sharesMinted, yield: yieldAmount, isYieldPositive } = event.args;
       
       // Store round information
       await this.db('rounds').insert({
@@ -437,10 +437,10 @@ class StreamVaultIndexer {
     }
   }
 
-  private async processTransferEvents(events: Log[], asset: string, chainId: number) {
+  private async processTransferEvents(events: any[], asset: string, chainId: number) {
     for (const event of events) {
       if (!event.args) continue;
-      const { from, to, value } = event.args as any;
+      const { from, to, value } = event.args;
       
       // Update balances (but don't exclude addresses here - we track all transfers)
       await this.db.transaction(async (trx) => {

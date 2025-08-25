@@ -6,7 +6,6 @@
  */
 
 import { Command } from 'commander';
-import { createLogger } from '../utils/logger';
 import { getOrchestrator } from '../services/IndexerOrchestrator';
 import { BackfillService } from '../services/BackfillService';
 import { getDb } from '../db/connection';
@@ -15,7 +14,6 @@ import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
 
-const logger = createLogger('CLI');
 const program = new Command();
 
 program
@@ -32,7 +30,7 @@ indexer
   .command('start')
   .description('Start all indexers')
   .option('--chain <chain>', 'Start specific chain only')
-  .action(async (options) => {
+  .action(async () => {
     const spinner = ora('Starting indexers...').start();
     
     try {
@@ -261,7 +259,7 @@ droplets
         console.log(chalk.gray('\n  Breakdown:'));
         
         const table = new Table();
-        for (const [asset, amount] of Object.entries(result.breakdown)) {
+        for (const [asset, amount] of Object.entries(result.breakdown || {})) {
           table.push([asset, amount]);
         }
         console.log(table.toString());

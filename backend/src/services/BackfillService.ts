@@ -3,7 +3,7 @@
  * Handles historical data backfilling with progress tracking
  */
 
-import { createPublicClient, http, Address, Log, decodeEventLog, parseAbiItem } from 'viem';
+import { createPublicClient, http, Address, decodeEventLog, parseAbiItem } from 'viem';
 import { getDb } from '../db/connection';
 import { createLogger } from '../utils/logger';
 import { CHAIN_CONFIGS, ChainConfig, getEarliestDeploymentBlock } from '../config/chains';

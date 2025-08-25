@@ -16,19 +16,13 @@
     "db:migrate:prod": "knex migrate:latest --knexfile dist/db/knexfile.js --env production",
     "db:rollback": "knex migrate:rollback --knexfile src/db/knexfile.ts",
     "db:seed": "knex seed:run --knexfile src/db/knexfile.ts",
-    "test": "jest",
-    "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "indexer:start": "tsx src/cli/index.ts indexer start",
     "indexer:status": "tsx src/cli/index.ts indexer status",
     "api": "tsx src/api/server.ts",
     "backfill": "tsx src/cli/index.ts backfill run",
-    "droplets": "tsx src/cli/index.ts droplets",
-    "validate": "tsx scripts/validate.ts",
-    "validate:impl": "tsx src/scripts/validate-implementation.ts",
-    "test:db": "tsx scripts/test-db.ts",
-    "debug:railway": "tsx scripts/railway-debug.ts"
+    "droplets": "tsx src/cli/index.ts droplets"
   },
   "engines": {
     "node": ">=20.0.0",
@@ -64,14 +58,11 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
     "@types/pg": "^8.11.2",
     "@typescript-eslint/eslint-plugin": "^7.1.0",
     "@typescript-eslint/parser": "^7.1.0",
     "eslint": "^8.57.0",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"

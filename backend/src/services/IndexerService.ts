@@ -64,7 +64,7 @@ export class IndexerService extends EventEmitter {
    * Creates a viem client with fallback RPC endpoints
    */
   private createClientWithFallback(): PublicClient {
-    const [primaryRpc, ...fallbackRpcs] = this.config.rpcEndpoints;
+    const [primaryRpc] = this.config.rpcEndpoints;
     
     return createPublicClient({
       chain: this.config.chain,
@@ -288,10 +288,10 @@ export class IndexerService extends EventEmitter {
   /**
    * Process stake events
    */
-  private async processStakeEvents(trx: any, events: Log[], asset: AssetType): Promise<void> {
+  private async processStakeEvents(trx: any, events: any[], asset: AssetType): Promise<void> {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       await trx('share_events').insert({
         chain_id: this.config.chainId,
@@ -312,10 +312,10 @@ export class IndexerService extends EventEmitter {
   /**
    * Process unstake events
    */
-  private async processUnstakeEvents(trx: any, events: Log[], asset: AssetType): Promise<void> {
+  private async processUnstakeEvents(trx: any, events: any[], asset: AssetType): Promise<void> {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       const address = account.toLowerCase();
       
@@ -347,10 +347,10 @@ export class IndexerService extends EventEmitter {
   /**
    * Process redeem events
    */
-  private async processRedeemEvents(trx: any, events: Log[], asset: AssetType): Promise<void> {
+  private async processRedeemEvents(trx: any, events: any[], asset: AssetType): Promise<void> {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, share, round } = event.args as any;
+      const { account, share, round } = event.args;
       
       await trx('share_events').insert({
         chain_id: this.config.chainId,
@@ -371,10 +371,10 @@ export class IndexerService extends EventEmitter {
   /**
    * Process instant unstake events
    */
-  private async processInstantUnstakeEvents(trx: any, events: Log[], asset: AssetType): Promise<void> {
+  private async processInstantUnstakeEvents(trx: any, events: any[], asset: AssetType): Promise<void> {
     for (const event of events) {
       if (!event.args) continue;
-      const { account, amount, round } = event.args as any;
+      const { account, amount, round } = event.args;
       
       await trx('share_events').insert({
         chain_id: this.config.chainId,
@@ -395,7 +395,7 @@ export class IndexerService extends EventEmitter {
   /**
    * Process round roll events
    */
-  private async processRoundRollEvents(trx: any, events: Log[], asset: AssetType): Promise<void> {
+  private async processRoundRollEvents(trx: any, events: any[], asset: AssetType): Promise<void> {
     for (const event of events) {
       if (!event.args) continue;
       const { 
@@ -404,7 +404,7 @@ export class IndexerService extends EventEmitter {
         sharesMinted, 
         yield: yieldAmount, 
         isYieldPositive 
-      } = event.args as any;
+      } = event.args;
       
       await trx('rounds').insert({
         round_id: Number(round),
