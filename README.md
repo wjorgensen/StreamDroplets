@@ -1,7 +1,5 @@
 # Stream Droplets Tracker
 
-A production-ready blockchain indexing and points calculation system for the Stream Protocol. This system tracks user interactions with StreamVault contracts across Ethereum and Sonic chains, calculating droplet rewards based on USD exposure.
-
 ## Overview
 
 Stream Droplets is a reward system where users earn points (droplets) for providing liquidity to StreamVault contracts. The system:
@@ -186,9 +184,6 @@ npm run build
 
 # Run combined server
 npm start
-
-# Or use the simple start script
-node start-simple.js
 ```
 
 ### CLI Commands
@@ -338,18 +333,6 @@ src/
 ├── services/      # Core business logic
 ├── types/         # TypeScript type definitions
 └── utils/         # Utility functions
-```
-
-### Testing
-```bash
-# Run tests
-npm test
-
-# Run with coverage
-npm run test:coverage
-
-# Run specific test file
-npm test -- path/to/test.spec.ts
 ```
 
 ## License
