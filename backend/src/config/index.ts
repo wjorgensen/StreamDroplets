@@ -83,7 +83,7 @@ function loadConfig(): Config {
       sonicBaseUrl: process.env.ALCHEMY_SONIC_BASE_URL,
     },
     api: {
-      port: parseInt(process.env.API_PORT || '3000'),
+      port: parseInt(process.env.PORT || process.env.API_PORT || '3000'),
       host: process.env.API_HOST || '0.0.0.0',
       rateLimit: parseInt(process.env.API_RATE_LIMIT || '100'),
       adminKey: process.env.ADMIN_API_KEY,

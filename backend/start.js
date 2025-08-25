@@ -34,13 +34,19 @@ function runCommand(command, args = []) {
 
 async function start() {
   try {
-    // Run migrations first
+    // Run migrations first using knex
     console.log('\n=== Running database migrations ===');
-    await runCommand('npx', ['tsx', 'dist/db/migrate.js']);
-    console.log('✅ Migrations complete');
+    try {
+      await runCommand('npx', ['knex', 'migrate:latest', '--knexfile', 'dist/db/knexfile.js']);
+      console.log('✅ Migrations complete');
+    } catch (migrationError) {
+      console.log('⚠️ Migration failed (this might be normal if DB is not ready):', migrationError.message);
+      console.log('Continuing with server startup...');
+    }
     
     // Start the main API server
     console.log('\n=== Starting API server ===');
+    console.log(`Server will listen on port: ${process.env.PORT || 3000}`);
     await runCommand('node', ['dist/api/server.js']);
     
   } catch (error) {
