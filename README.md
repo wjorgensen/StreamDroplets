@@ -2,6 +2,14 @@
 
 A deterministic, auditable points tracking system for Stream Protocol vaults using round-based accounting with USD-denominated rewards across Ethereum and Sonic chains.
 
+## Project Structure
+
+This is a monorepo containing:
+- `/backend` - Node.js API server and blockchain indexer
+- `/frontend` - React web application
+
+For Railway deployment, set the root directory to `/backend`.
+
 ## Overview
 
 The Stream Droplets tracker indexes vault activity, calculates points ("droplets") based on USD exposure, and provides a REST API for querying balances and leaderboards. The system uses a round-based approach where users earn points for holding shares at round start, with exclusions for withdrawal rounds.

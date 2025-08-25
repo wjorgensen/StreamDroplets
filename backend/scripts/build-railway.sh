@@ -12,13 +12,6 @@ npm install
 echo "Building TypeScript..."
 npx tsc
 
-# Build frontend
-echo "Building frontend..."
-cd frontend
-npm install
-npm run build
-cd ..
-
 # Skip migrations during build - Railway uses internal URL during build
 echo "Skipping migrations during build (will run at startup)"
 echo "Note: Railway provides internal DATABASE_URL during build which doesn't work for migrations"
