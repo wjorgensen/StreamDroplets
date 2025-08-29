@@ -28,7 +28,6 @@ const configSchema = z.object({
     port: z.number().default(3000),
     host: z.string().default('0.0.0.0'),
     rateLimit: z.number().default(100),
-    adminKey: z.string().optional(),
   }),
   
   // Indexer
@@ -86,7 +85,6 @@ function loadConfig(): Config {
       port: parseInt(process.env.PORT || process.env.API_PORT || '3000'),
       host: process.env.API_HOST || '0.0.0.0',
       rateLimit: parseInt(process.env.API_RATE_LIMIT || '100'),
-      adminKey: process.env.ADMIN_API_KEY,
     },
     indexer: {
       batchSize: parseInt(process.env.INDEXER_BATCH_SIZE || '100'),

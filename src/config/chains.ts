@@ -4,7 +4,16 @@
  */
 
 import { Chain } from 'viem';
-import { mainnet, sonic } from 'viem/chains';
+import { mainnet, base, arbitrum, avalanche } from 'viem/chains';
+
+// Validate required environment variables at startup
+function validateEnvVar(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Required environment variable ${name} is not set`);
+  }
+  return value;
+}
 
 export interface VaultDeployment {
   address: string;
@@ -33,29 +42,33 @@ export const ethereumConfig: ChainConfig = {
   chainId: 1,
   name: 'Ethereum',
   rpcEndpoints: [
-    process.env.ALCHEMY_ETH_RPC || `${process.env.ALCHEMY_ETH_BASE_URL}${process.env.ALCHEMY_API_KEY_1}`,
-    // Add fallback endpoints for production resilience
+    `${process.env.ALCHEMY_ETH_BASE_URL}${process.env.ALCHEMY_API_KEY_1}`,
     `${process.env.ALCHEMY_ETH_BASE_URL}${process.env.ALCHEMY_API_KEY_2}`,
     `${process.env.ALCHEMY_ETH_BASE_URL}${process.env.ALCHEMY_API_KEY_3}`,
-  ].filter(Boolean),
+  ].filter(url => {
+    if (!url || url.includes('undefined')) {
+      throw new Error('Missing ALCHEMY_ETH_BASE_URL or ALCHEMY_API_KEY in environment');
+    }
+    return true;
+  }),
   vaults: {
     xETH: {
-      address: process.env.XETH_VAULT_ETH || '0x7E586fBaF3084C0be7aB5C82C04FfD7592723153',
+      address: validateEnvVar('XETH_VAULT_ETH'),
       deploymentBlock: 21872329,
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_VAULT_ETH || '0x12fd502e2052CaFB41eccC5B596023d9978057d6',
+      address: validateEnvVar('XBTC_VAULT_ETH'),
       deploymentBlock: 21872534,
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_VAULT_ETH || '0xE2Fc85BfB48C4cF147921fBE110cf92Ef9f26F94',
+      address: validateEnvVar('XUSD_VAULT_ETH'),
       deploymentBlock: 21871574,
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_VAULT_ETH || '0xc15697f61170Fc3Bb4e99Eb7913b4C7893F64F13',
+      address: validateEnvVar('XEUR_VAULT_ETH'),
       deploymentBlock: 22999283,
       firstRound: 1,
     },
@@ -70,37 +83,262 @@ export const ethereumConfig: ChainConfig = {
 };
 
 // Sonic Chain Configuration
+const sonicChain = {
+  id: 146,
+  name: 'Sonic',
+  nativeCurrency: {
+    decimals: 18,
+    name: 'Sonic',
+    symbol: 'S',
+  },
+  rpcUrls: {
+    default: { http: ['https://rpc.soniclabs.com'] },
+    public: { http: ['https://rpc.soniclabs.com'] },
+  },
+} as const;
+
 export const sonicConfig: ChainConfig = {
-  chain: sonic as Chain,
+  chain: sonicChain,
   chainId: 146,
   name: 'Sonic',
   rpcEndpoints: [
-    process.env.ALCHEMY_SONIC_RPC || 'https://rpc.soniclabs.com',
-    'https://rpc.soniclabs.com', // Public RPC as fallback
-  ].filter(Boolean),
+    `${process.env.ALCHEMY_SONIC_BASE_URL}${process.env.ALCHEMY_API_KEY_1}`,
+    `${process.env.ALCHEMY_SONIC_BASE_URL}${process.env.ALCHEMY_API_KEY_2}`,
+    `${process.env.ALCHEMY_SONIC_BASE_URL}${process.env.ALCHEMY_API_KEY_3}`,
+  ].filter(url => {
+    if (!url || url.includes('undefined')) {
+      throw new Error('Missing ALCHEMY_SONIC_BASE_URL or ALCHEMY_API_KEY in environment');
+    }
+    return true;
+  }),
   vaults: {
     xETH: {
-      address: process.env.XETH_VAULT_SONIC || '0x16af6b1315471Dc306D47e9CcEfEd6e5996285B6',
+      address: process.env.XETH_OFT_SONIC!,
       deploymentBlock: 100000000, // TODO: Find actual deployment blocks for Sonic
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_VAULT_SONIC || '0xB88fF15ae5f82c791e637b27337909BcF8065270',
+      address: process.env.XBTC_OFT_SONIC!,
       deploymentBlock: 100000000,
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_VAULT_SONIC || '0x6202B9f02E30E5e1c62Cc01E4305450E5d83b926',
+      address: process.env.XUSD_OFT_SONIC!,
       deploymentBlock: 100000000,
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_VAULT_SONIC || '0x931383c1bCA6a41E931f2519BAe8D716857F156c',
+      address: process.env.XEUR_OFT_SONIC!,
       deploymentBlock: 100000000,
       firstRound: 1,
     },
   },
   confirmations: parseInt(process.env.SONIC_CONFIRMATIONS || '32'),
+  batchSize: 500,
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 3000,
+    backoffMultiplier: 2,
+  },
+};
+
+// Base Chain Configuration
+export const baseConfig: ChainConfig = {
+  chain: base,
+  chainId: 8453,
+  name: 'Base',
+  rpcEndpoints: [
+    `${process.env.ALCHEMY_BASE_URL}${process.env.ALCHEMY_API_KEY_1}`,
+    `${process.env.ALCHEMY_BASE_URL}${process.env.ALCHEMY_API_KEY_2}`,
+    `${process.env.ALCHEMY_BASE_URL}${process.env.ALCHEMY_API_KEY_3}`,
+  ].filter(url => {
+    if (!url || url.includes('undefined')) {
+      throw new Error('Missing ALCHEMY_BASE_URL or ALCHEMY_API_KEY in environment');
+    }
+    return true;
+  }),
+  vaults: {
+    xETH: {
+      address: process.env.XETH_OFT_BASE!,
+      deploymentBlock: 17248800, // ~191 days ago from current
+      firstRound: 1,
+    },
+    xBTC: {
+      address: process.env.XBTC_OFT_BASE!,
+      deploymentBlock: 17248800,
+      firstRound: 1,
+    },
+    xUSD: {
+      address: process.env.XUSD_OFT_BASE!,
+      deploymentBlock: 17248800,
+      firstRound: 1,
+    },
+    xEUR: {
+      address: process.env.XEUR_OFT_BASE!,
+      deploymentBlock: 17248800,
+      firstRound: 1,
+    },
+  },
+  confirmations: parseInt(process.env.BASE_CONFIRMATIONS || '6'),
+  batchSize: 1000,
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000,
+    backoffMultiplier: 1.5,
+  },
+};
+
+// Arbitrum Chain Configuration
+export const arbitrumConfig: ChainConfig = {
+  chain: arbitrum,
+  chainId: 42161,
+  name: 'Arbitrum',
+  rpcEndpoints: [
+    `${process.env.ALCHEMY_ARB_URL}${process.env.ALCHEMY_API_KEY_1}`,
+    `${process.env.ALCHEMY_ARB_URL}${process.env.ALCHEMY_API_KEY_2}`,
+    `${process.env.ALCHEMY_ARB_URL}${process.env.ALCHEMY_API_KEY_3}`,
+  ].filter(url => {
+    if (!url || url.includes('undefined')) {
+      throw new Error('Missing ALCHEMY_ARB_URL or ALCHEMY_API_KEY in environment');
+    }
+    return true;
+  }),
+  vaults: {
+    xETH: {
+      address: process.env.XETH_OFT_ARB!,
+      deploymentBlock: 244160000, // ~191 days ago from current
+      firstRound: 1,
+    },
+    xBTC: {
+      address: process.env.XBTC_OFT_ARB!,
+      deploymentBlock: 244160000,
+      firstRound: 1,
+    },
+    xUSD: {
+      address: process.env.XUSD_OFT_ARB!,
+      deploymentBlock: 244160000,
+      firstRound: 1,
+    },
+    xEUR: {
+      address: process.env.XEUR_OFT_ARB!,
+      deploymentBlock: 244160000,
+      firstRound: 1,
+    },
+  },
+  confirmations: parseInt(process.env.ARB_CONFIRMATIONS || '6'),
+  batchSize: 1000,
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000,
+    backoffMultiplier: 1.5,
+  },
+};
+
+// Avalanche Chain Configuration
+export const avalancheConfig: ChainConfig = {
+  chain: avalanche,
+  chainId: 43114,
+  name: 'Avalanche',
+  rpcEndpoints: [
+    `${process.env.ALCHEMY_AVAX_URL}${process.env.ALCHEMY_API_KEY_1}`,
+    `${process.env.ALCHEMY_AVAX_URL}${process.env.ALCHEMY_API_KEY_2}`,
+    `${process.env.ALCHEMY_AVAX_URL}${process.env.ALCHEMY_API_KEY_3}`,
+  ].filter(url => {
+    if (!url || url.includes('undefined')) {
+      throw new Error('Missing ALCHEMY_AVAX_URL or ALCHEMY_API_KEY in environment');
+    }
+    return true;
+  }),
+  vaults: {
+    xETH: {
+      address: process.env.XETH_OFT_AVAX!,
+      deploymentBlock: 47748800, // ~191 days ago from current
+      firstRound: 1,
+    },
+    xBTC: {
+      address: process.env.XBTC_OFT_AVAX!,
+      deploymentBlock: 47748800,
+      firstRound: 1,
+    },
+    xUSD: {
+      address: process.env.XUSD_OFT_AVAX!,
+      deploymentBlock: 47748800,
+      firstRound: 1,
+    },
+    xEUR: {
+      address: process.env.XEUR_OFT_AVAX!,
+      deploymentBlock: 47748800,
+      firstRound: 1,
+    },
+  },
+  confirmations: parseInt(process.env.AVAX_CONFIRMATIONS || '2'),
+  batchSize: 500,
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 1000,
+    backoffMultiplier: 1.5,
+  },
+};
+
+// Berachain Configuration (Mainnet)
+const berachainChain = {
+  id: 81457,
+  name: 'Berachain',
+  nativeCurrency: {
+    decimals: 18,
+    name: 'BERA',
+    symbol: 'BERA',
+  },
+  rpcUrls: {
+    default: { http: ['https://rpc.berachain.com'] },
+    public: { http: ['https://rpc.berachain.com'] },
+  },
+} as const;
+
+export const berachainConfig: ChainConfig = {
+  chain: berachainChain,
+  chainId: 81457,
+  name: 'Berachain',
+  rpcEndpoints: (() => {
+    const baseUrl = process.env.ALCHEMY_BERA_RPC;
+    // Handle the case where BERA URL already includes /v2/
+    const needsV2 = baseUrl && !baseUrl.endsWith('/v2/');
+    const finalBase = needsV2 ? `${baseUrl}/` : baseUrl;
+    
+    return [
+      `${finalBase}${process.env.ALCHEMY_API_KEY_1}`,
+      `${finalBase}${process.env.ALCHEMY_API_KEY_2}`,
+      `${finalBase}${process.env.ALCHEMY_API_KEY_3}`,
+    ].filter(url => {
+      if (!url || url.includes('undefined')) {
+        throw new Error('Missing ALCHEMY_BERA_RPC or ALCHEMY_API_KEY in environment');
+      }
+      return true;
+    });
+  })(),
+  vaults: {
+    xETH: {
+      address: process.env.XETH_OFT_BERA!,
+      deploymentBlock: 2699520, // ~191 days ago from current
+      firstRound: 1,
+    },
+    xBTC: {
+      address: process.env.XBTC_OFT_BERA!,
+      deploymentBlock: 2699520,
+      firstRound: 1,
+    },
+    xUSD: {
+      address: process.env.XUSD_OFT_BERA!,
+      deploymentBlock: 2699520,
+      firstRound: 1,
+    },
+    xEUR: {
+      address: process.env.XEUR_OFT_BERA!,
+      deploymentBlock: 2699520,
+      firstRound: 1,
+    },
+  },
+  confirmations: parseInt(process.env.BERA_CONFIRMATIONS || '32'),
   batchSize: 500,
   retryConfig: {
     retryCount: 3,
@@ -118,6 +356,10 @@ export function getEarliestDeploymentBlock(config: ChainConfig): number {
 export const CHAIN_CONFIGS = {
   ethereum: ethereumConfig,
   sonic: sonicConfig,
+  base: baseConfig,
+  arbitrum: arbitrumConfig,
+  avalanche: avalancheConfig,
+  berachain: berachainConfig,
 } as const;
 
 // Get chain config by ID

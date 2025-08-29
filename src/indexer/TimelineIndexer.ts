@@ -1,11 +1,12 @@
 import { createPublicClient, http, Log, Block } from 'viem';
-import { mainnet } from 'viem/chains';
 import { getDb } from '../db/connection';
 import { config } from '../config';
 import { CONSTANTS, ChainId, AssetType } from '../config/constants';
 import { CONTRACTS } from '../config/contracts';
 import { createLogger } from '../utils/logger';
 import { TimelineOracleService } from '../oracle/TimelineOracleService';
+import { getRPCManager } from '../utils/rpcManager';
+import { CHAIN_CONFIGS } from '../config/chains';
 
 const logger = createLogger('TimelineIndexer');
 
@@ -28,36 +29,40 @@ export interface TimelineInterval {
 export class TimelineIndexer {
   private db = getDb();
   private clients: Map<ChainId, any> = new Map();
+  private clientArrays: Map<ChainId, any[]> = new Map();
+  private clientIndexes: Map<ChainId, number> = new Map();
   private oracleService: TimelineOracleService;
   private isRunning = false;
   
   constructor() {
-    // Initialize Ethereum client
-    this.clients.set(CONSTANTS.CHAIN_IDS.ETHEREUM, createPublicClient({
-      chain: mainnet,
-      transport: http(config.rpc.ethereum),
-    }));
+    // Initialize clients for all chains
+    const rpcManager = getRPCManager();
     
-    // Initialize Sonic client (using custom chain config)
-    const sonicChain = {
-      id: CONSTANTS.CHAIN_IDS.SONIC,
-      name: 'Sonic',
-      network: 'sonic',
-      nativeCurrency: {
-        decimals: 18,
-        name: 'Sonic',
-        symbol: 'S',
-      },
-      rpcUrls: {
-        default: { http: [config.rpc.sonic] },
-        public: { http: [config.rpc.sonic] },
-      },
-    };
-    
-    this.clients.set(CONSTANTS.CHAIN_IDS.SONIC, createPublicClient({
-      chain: sonicChain as any,
-      transport: http(config.rpc.sonic),
-    }));
+    // Initialize clients for each configured chain
+    for (const [chainName, chainConfig] of Object.entries(CHAIN_CONFIGS)) {
+      if (!chainConfig.rpcEndpoints || chainConfig.rpcEndpoints.length === 0) {
+        logger.warn(`No RPC endpoints configured for ${chainName}`);
+        continue;
+      }
+      
+      // Create multiple clients for load balancing (one per API key)
+      const clients = chainConfig.rpcEndpoints.map((rpcEndpoint, index) => {
+        logger.info(`Creating client ${index + 1}/${chainConfig.rpcEndpoints.length} for ${chainName}`);
+        return createPublicClient({
+          chain: chainConfig.chain as any,
+          transport: http(rpcEndpoint, {
+            retryCount: 2,
+            retryDelay: 1000,
+          }),
+        });
+      });
+      
+      this.clientArrays.set(chainConfig.chainId, clients);
+      this.clientIndexes.set(chainConfig.chainId, 0);
+      // Set first client as default for backward compatibility
+      this.clients.set(chainConfig.chainId, clients[0]);
+      logger.info(`Initialized ${clients.length} clients for ${chainName} (${chainConfig.chainId})`);
+    }
     
     this.oracleService = new TimelineOracleService();
   }
@@ -74,24 +79,34 @@ export class TimelineIndexer {
     // Start indexing for each chain and asset
     const indexPromises: Promise<void>[] = [];
     
-    for (const [asset, contractConfig] of Object.entries(CONTRACTS)) {
-      // Index Ethereum
-      indexPromises.push(
-        this.indexChain(
-          CONSTANTS.CHAIN_IDS.ETHEREUM,
-          asset as AssetType,
-          contractConfig.ethereum
-        )
+    // Iterate through all configured chains
+    for (const chainConfig of Object.values(CHAIN_CONFIGS)) {
+      // Skip chains without valid addresses
+      const hasValidVaults = Object.values(chainConfig.vaults).some(
+        vault => vault.address && vault.address !== '0x0000000000000000000000000000000000000000'
       );
       
-      // Index Sonic
-      indexPromises.push(
-        this.indexChain(
-          CONSTANTS.CHAIN_IDS.SONIC,
-          asset as AssetType,
-          contractConfig.sonic
-        )
-      );
+      if (!hasValidVaults) {
+        logger.info(`Skipping ${chainConfig.name} - no valid vault addresses`);
+        continue;
+      }
+      
+      // Index each asset on this chain
+      for (const [asset, vaultConfig] of Object.entries(chainConfig.vaults)) {
+        if (!vaultConfig.address || vaultConfig.address === '0x0000000000000000000000000000000000000000') {
+          continue;
+        }
+        
+        indexPromises.push(
+          this.indexChain(
+            chainConfig.chainId,
+            asset as AssetType,
+            vaultConfig.address
+          ).catch(error => {
+            logger.error(`Failed to start indexing ${asset} on ${chainConfig.name}:`, error);
+          })
+        );
+      }
     }
     
     await Promise.all(indexPromises);
@@ -102,42 +117,90 @@ export class TimelineIndexer {
     logger.info('Stopping timeline indexer');
   }
   
+  private getNextClient(chainId: ChainId): any {
+    const clients = this.clientArrays.get(chainId);
+    if (!clients || clients.length === 0) {
+      return this.clients.get(chainId);
+    }
+    
+    // Round-robin through clients
+    const currentIndex = this.clientIndexes.get(chainId) || 0;
+    const nextIndex = (currentIndex + 1) % clients.length;
+    this.clientIndexes.set(chainId, nextIndex);
+    
+    return clients[nextIndex];
+  }
+  
   private async indexChain(chainId: ChainId, asset: AssetType, contractAddress: string) {
-    const client = this.clients.get(chainId);
-    if (!client) {
-      logger.error(`No client configured for chain ${chainId}`);
+    const clients = this.clientArrays.get(chainId);
+    if (!clients || clients.length === 0) {
+      logger.error(`No clients configured for chain ${chainId}`);
       return;
     }
     
+    // Start with a rotating client
+    let client = this.getNextClient(chainId);
+    
     // Get or create cursor
     const cursor = await this.getCursor(chainId, contractAddress);
-    let currentBlock = BigInt(cursor.last_safe_block);
     
-    logger.info(`Starting timeline indexer for ${asset} on chain ${chainId} from block ${currentBlock}`);
+    logger.info(`Starting timeline indexer for ${asset} on chain ${chainId}`);
+    if (cursor.last_tx_hash) {
+      logger.info(`Resuming from tx ${cursor.last_tx_hash} log index ${cursor.last_log_index}`);
+    }
     
     while (this.isRunning) {
       try {
-        const latestBlock = await client.getBlockNumber();
-        const confirmations = chainId === CONSTANTS.CHAIN_IDS.ETHEREUM 
-          ? config.indexer.ethConfirmations 
-          : config.indexer.sonicConfirmations;
+        // Rotate client for each iteration to spread load
+        client = this.getNextClient(chainId);
         
-        const safeBlock = latestBlock - BigInt(confirmations);
+        // Fetch ALL logs for this contract address
+        const logs = await client.getLogs({
+          address: contractAddress as `0x${string}`,
+          fromBlock: 'earliest',
+          toBlock: 'latest',
+        });
         
-        if (currentBlock >= safeBlock) {
-          await new Promise(resolve => setTimeout(resolve, config.indexer.pollInterval));
-          continue;
+        logger.info(`Fetched ${logs.length} total logs for ${asset} on chain ${chainId}`);
+        
+        // Find where we left off based on tx hash and log index
+        let startProcessing = !cursor.last_tx_hash; // If no cursor, process all
+        let processedCount = 0;
+        let lastProcessedLog: any = null;
+        
+        for (const log of logs) {
+          // Skip logs we've already processed
+          if (!startProcessing) {
+            if (log.transactionHash === cursor.last_tx_hash && 
+                log.logIndex === cursor.last_log_index) {
+              startProcessing = true;
+              continue; // Skip this one, start with the next
+            }
+            continue;
+          }
+          
+          // Process this log
+          await this.processLog(log, chainId, asset);
+          processedCount++;
+          lastProcessedLog = log;
         }
         
-        // Process blocks in batches
-        const toBlock = currentBlock + BigInt(config.indexer.batchSize);
-        const endBlock = toBlock > safeBlock ? safeBlock : toBlock;
+        // Update cursor with the last processed log
+        if (lastProcessedLog) {
+          await this.updateCursorWithLog(
+            chainId, 
+            contractAddress, 
+            lastProcessedLog.blockNumber,
+            lastProcessedLog.transactionHash,
+            lastProcessedLog.logIndex
+          );
+          logger.info(`Processed ${processedCount} new logs for ${asset} on chain ${chainId}`);
+        } else {
+          logger.info(`No new logs to process for ${asset} on chain ${chainId}`);
+        }
         
-        await this.processBlockRange(chainId, asset, currentBlock, endBlock);
-        
-        // Update cursor
-        await this.updateCursor(chainId, contractAddress, endBlock);
-        currentBlock = endBlock + 1n;
+        // Wait before checking for new events
+        await new Promise(resolve => setTimeout(resolve, config.indexer.pollInterval));
         
       } catch (error) {
         logger.error(`Error indexing chain ${chainId}:`, error);
@@ -157,8 +220,15 @@ export class TimelineIndexer {
     if (!client) return;
     
     // Get all events in range
+    const chainName = this.getChainName(chainId);
+    const contractAddress = (CONTRACTS[asset] as any)[chainName];
+    
+    if (!contractAddress || contractAddress === '0x0000000000000000000000000000000000000000') {
+      return;
+    }
+    
     const logs = await client.getLogs({
-      address: CONTRACTS[asset][chainId === 1 ? 'ethereum' : 'sonic'] as `0x${string}`,
+      address: contractAddress as `0x${string}`,
       fromBlock,
       toBlock,
     });
@@ -181,7 +251,8 @@ export class TimelineIndexer {
   }
   
   private async processLog(log: Log, chainId: ChainId, asset: AssetType) {
-    const client = this.clients.get(chainId);
+    // Rotate client for block fetching
+    const client = this.getNextClient(chainId);
     const block = await client.getBlock({ blockNumber: log.blockNumber });
     
     // Get all affected addresses from this log
@@ -261,6 +332,11 @@ export class TimelineIndexer {
     // Close any open intervals for this address
     await this.closeOpenIntervals(address, asset, eventTime);
     
+    // Calculate USD exposure: (shares * PPS * token_price) / (10^pps_decimals * 10^price_decimals)
+    const ppsScale = 18n;
+    const priceScale = 8n;
+    const usdExposure = (currentBalance * currentPPS * BigInt(currentPrice)) / (10n ** ppsScale) / (10n ** priceScale);
+    
     // Start new interval
     const newInterval: TimelineInterval = {
       address,
@@ -272,6 +348,7 @@ export class TimelineIndexer {
       pps_scale: 18, // Standard for most contracts
       price_usd: currentPrice.toString(),
       price_scale: 8, // Chainlink standard
+      usd_exposure: usdExposure.toString(),
     };
     
     await this.db('timeline_intervals').insert(newInterval);
@@ -289,24 +366,254 @@ export class TimelineIndexer {
   }
   
   private async getBalanceAtBlock(
-    _address: string,
-    _asset: AssetType,
-    _chainId: ChainId,
-    _blockNumber: bigint
+    address: string,
+    asset: AssetType,
+    chainId: ChainId,
+    blockNumber: bigint
   ): Promise<bigint> {
-    // This would query the current balance table or calculate from events
-    // For now, return a placeholder
-    return 0n;
+    const client = this.clients.get(chainId);
+    if (!client) {
+      logger.error(`No client configured for chain ${chainId}`);
+      return 0n;
+    }
+    
+    const contractAddress = CONTRACTS[asset][chainId === CONSTANTS.CHAIN_IDS.ETHEREUM ? 'ethereum' : 'sonic'];
+    
+    // Check if we need to use cached data for very old blocks
+    const currentBlockClient = this.getNextClient(chainId);
+    const currentBlock = await currentBlockClient.getBlockNumber();
+    const blockAge = currentBlock - blockNumber;
+    const maxHistoricalDepth = 10000000n; // ~1.5 years on Ethereum at 12s blocks
+    
+    if (blockAge > maxHistoricalDepth) {
+      // Try to get from cache first for very old blocks
+      const cached = await this.getCachedBalance(address, asset, chainId, blockNumber);
+      if (cached !== null) {
+        return cached;
+      }
+    }
+    
+    try {
+      if (chainId === CONSTANTS.CHAIN_IDS.ETHEREUM) {
+        // On Ethereum, call shares() on the vault contract
+        const shares = await this.retryWithFallback(async () => {
+          return await client.readContract({
+            address: contractAddress as `0x${string}`,
+            abi: [{
+              name: 'shares',
+              type: 'function',
+              stateMutability: 'view',
+              inputs: [{ name: 'account', type: 'address' }],
+              outputs: [{ name: '', type: 'uint256' }]
+            }],
+            functionName: 'shares',
+            args: [address],
+            blockNumber
+          });
+        }, 3, 1000);
+        
+        // Cache the result for future use
+        await this.cacheBalance(address, asset, chainId, blockNumber, shares as bigint);
+        return shares as bigint;
+      } else {
+        // On all other chains (Sonic, Base, Arbitrum, etc.), call balanceOf() on the OFT contract
+        const balance = await this.retryWithFallback(async () => {
+          return await client.readContract({
+            address: contractAddress as `0x${string}`,
+            abi: [{
+              name: 'balanceOf',
+              type: 'function',
+              stateMutability: 'view',
+              inputs: [{ name: 'account', type: 'address' }],
+              outputs: [{ name: '', type: 'uint256' }]
+            }],
+            functionName: 'balanceOf',
+            args: [address],
+            blockNumber
+          });
+        }, 3, 1000);
+        
+        // Cache the result for future use
+        await this.cacheBalance(address, asset, chainId, blockNumber, balance as bigint);
+        return balance as bigint;
+      }
+    } catch (error) {
+      logger.error(`Error fetching balance for ${address} on chain ${chainId} at block ${blockNumber}:`, error);
+      
+      // Try to get from cache as last resort
+      const cached = await this.getCachedBalance(address, asset, chainId, blockNumber);
+      if (cached !== null) {
+        return cached;
+      }
+      
+      return 0n;
+    }
+  }
+  
+  private async retryWithFallback<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    delay: number = 1000
+  ): Promise<T> {
+    let lastError: any;
+    
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        lastError = error;
+        
+        // Check if it's a historical block depth error
+        if (error.message?.includes('block range') || 
+            error.message?.includes('historical') ||
+            error.message?.includes('archive')) {
+          logger.warn(`Historical block query failed, will use cache: ${error.message}`);
+          throw error; // Don't retry for historical depth errors
+        }
+        
+        if (i < maxRetries - 1) {
+          logger.debug(`Retry ${i + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i))); // Exponential backoff
+        }
+      }
+    }
+    
+    throw lastError;
+  }
+  
+  private async getCachedBalance(
+    address: string,
+    asset: AssetType,
+    chainId: ChainId,
+    blockNumber: bigint
+  ): Promise<bigint | null> {
+    try {
+      const cached = await this.db('balance_cache')
+        .where({ address, asset, chain_id: chainId })
+        .where('block_number', '<=', blockNumber.toString())
+        .orderBy('block_number', 'desc')
+        .first();
+      
+      if (cached) {
+        return BigInt(cached.balance);
+      }
+    } catch (error) {
+      logger.debug('Cache lookup failed:', error);
+    }
+    
+    return null;
+  }
+  
+  private async cacheBalance(
+    address: string,
+    asset: AssetType,
+    chainId: ChainId,
+    blockNumber: bigint,
+    balance: bigint
+  ): Promise<void> {
+    try {
+      await this.db('balance_cache')
+        .insert({
+          address,
+          asset,
+          chain_id: chainId,
+          block_number: blockNumber.toString(),
+          balance: balance.toString(),
+          timestamp: new Date(),
+          created_at: new Date()
+        })
+        .onConflict(['address', 'asset', 'chain_id', 'block_number'])
+        .merge();
+    } catch (error) {
+      logger.debug('Failed to cache balance:', error);
+    }
   }
   
   private async getPPSAtBlock(
-    _asset: AssetType,
-    _chainId: ChainId,
-    _blockNumber: bigint
+    asset: AssetType,
+    chainId: ChainId,
+    blockNumber: bigint
   ): Promise<bigint> {
-    // This would query the rounds table for the PPS at this block
-    // For now, return a placeholder
-    return 1000000000000000000n; // 1.0 PPS
+    // PPS (Price Per Share) is only available on Ethereum vault
+    // For ALL chains (including Sonic), we query the Ethereum vault for PPS
+    // Non-Ethereum chains should NEVER try to fetch PPS locally
+    
+    // Always use Ethereum client for PPS, regardless of which chain requested it
+    const ethereumClient = this.getNextClient(CONSTANTS.CHAIN_IDS.ETHEREUM);
+    if (!ethereumClient) {
+      logger.error('No Ethereum client configured for PPS fetch');
+      return 1000000000000000000n; // Default to 1.0 PPS
+    }
+    
+    const vaultAddress = CONTRACTS[asset].ethereum;
+    
+    try {
+      // For non-Ethereum chains, we need to use the latest block on Ethereum
+      // since the block number from other chains doesn't exist on Ethereum
+      let ethereumBlockNumber = blockNumber;
+      
+      if (chainId !== CONSTANTS.CHAIN_IDS.ETHEREUM) {
+        // For non-Ethereum chains, use the latest Ethereum block
+        // This gives us the current PPS which is good enough for other chains
+        try {
+          ethereumBlockNumber = await ethereumClient.getBlockNumber();
+        } catch {
+          // If we can't get latest block, use a recent known block
+          ethereumBlockNumber = 20000000n; // Recent Ethereum block as fallback
+        }
+      }
+      
+      // First get the current round number
+      const currentRound = await ethereumClient.readContract({
+        address: vaultAddress as `0x${string}`,
+        abi: [{
+          name: 'currentRound',
+          type: 'function',
+          stateMutability: 'view',
+          inputs: [],
+          outputs: [{ name: '', type: 'uint256' }]
+        }],
+        functionName: 'currentRound',
+        blockNumber: ethereumBlockNumber
+      });
+      
+      // Then get the PPS for this round
+      const pps = await ethereumClient.readContract({
+        address: vaultAddress as `0x${string}`,
+        abi: [{
+          name: 'roundPricePerShare',
+          type: 'function',
+          stateMutability: 'view',
+          inputs: [{ name: 'round', type: 'uint256' }],
+          outputs: [{ name: '', type: 'uint256' }]
+        }],
+        functionName: 'roundPricePerShare',
+        args: [currentRound],
+        blockNumber: ethereumBlockNumber
+      });
+      
+      return pps as bigint;
+    } catch (error) {
+      // Only log error if it's on Ethereum chain, for other chains this is expected
+      if (chainId === CONSTANTS.CHAIN_IDS.ETHEREUM) {
+        logger.error(`Error fetching PPS for ${asset} at block ${blockNumber}:`, error);
+      } else {
+        logger.debug(`Using fallback PPS for ${asset} on chain ${chainId}`);
+      }
+      
+      // Check if we have a cached PPS in the database
+      const cachedPPS = await this.db('vault_states')
+        .where({ asset })
+        .where('block_number', '<=', blockNumber.toString())
+        .orderBy('block_number', 'desc')
+        .first();
+      
+      if (cachedPPS && cachedPPS.pps) {
+        return BigInt(cachedPPS.pps);
+      }
+      
+      return 1000000000000000000n; // Default to 1.0 PPS
+    }
   }
   
   private async getCursor(chainId: ChainId, contractAddress: string) {
@@ -334,6 +641,23 @@ export class TimelineIndexer {
       .where({ chain_id: chainId, contract_address: contractAddress })
       .update({
         last_safe_block: block.toString(),
+        updated_at: new Date(),
+      });
+  }
+  
+  private async updateCursorWithLog(
+    chainId: ChainId, 
+    contractAddress: string, 
+    blockNumber: bigint,
+    txHash: string,
+    logIndex: number
+  ) {
+    await this.db('cursors')
+      .where({ chain_id: chainId, contract_address: contractAddress })
+      .update({
+        last_safe_block: blockNumber.toString(),
+        last_tx_hash: txHash,
+        last_log_index: logIndex,
         updated_at: new Date(),
       });
   }
@@ -367,12 +691,20 @@ export class TimelineIndexer {
       
       const durationSeconds = BigInt(Math.floor((intervalEnd.getTime() - intervalStart.getTime()) / 1000));
       
-      // Calculate USD exposure
-      const shares = BigInt(interval.shares);
-      const pps = BigInt(interval.pps);
-      const price = BigInt(interval.price_usd);
-      
-      const usdExposure = (shares * pps * price) / (10n ** 18n) / (10n ** 8n);
+      // Use pre-calculated USD exposure if available, otherwise calculate it
+      let usdExposure: bigint;
+      if (interval.usd_exposure) {
+        usdExposure = BigInt(interval.usd_exposure);
+      } else {
+        // Calculate USD exposure: (shares * PPS * token_price) / (10^pps_decimals * 10^price_decimals)
+        const shares = BigInt(interval.shares);
+        const pps = BigInt(interval.pps);
+        const price = BigInt(interval.price_usd);
+        const ppsScale = BigInt(interval.pps_scale || 18);
+        const priceScale = BigInt(interval.price_scale || 8);
+        
+        usdExposure = (shares * pps * price) / (10n ** ppsScale) / (10n ** priceScale);
+      }
       
       // Get rate for this time period
       const rate = await this.getRateAtTime(intervalStart);
@@ -396,5 +728,24 @@ export class TimelineIndexer {
       .first();
     
     return rate ? BigInt(rate.rate_per_usd_second) : 1000000000000000000n;
+  }
+  
+  private getChainName(chainId: number): string {
+    switch (chainId) {
+      case CONSTANTS.CHAIN_IDS.ETHEREUM:
+        return 'ethereum';
+      case CONSTANTS.CHAIN_IDS.SONIC:
+        return 'sonic';
+      case CONSTANTS.CHAIN_IDS.BASE:
+        return 'base';
+      case CONSTANTS.CHAIN_IDS.ARBITRUM:
+        return 'arbitrum';
+      case CONSTANTS.CHAIN_IDS.AVALANCHE:
+        return 'avalanche';
+      case CONSTANTS.CHAIN_IDS.BERACHAIN:
+        return 'berachain';
+      default:
+        return 'ethereum';
+    }
   }
 }

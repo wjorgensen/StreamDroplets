@@ -6,9 +6,6 @@ import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { pointsRoutes } from './routes/points';
 import { leaderboardRoutes } from './routes/leaderboard';
-import { eventsRoutes } from './routes/events';
-import { roundsRoutes } from './routes/rounds';
-import { adminRoutes } from './routes/admin';
 import { healthRoutes } from './routes/health';
 import { testConnection } from '../db/connection';
 
@@ -38,9 +35,6 @@ export async function createServer() {
   // Register routes under /api/v1
   await fastify.register(pointsRoutes, { prefix: '/api/v1/points' });
   await fastify.register(leaderboardRoutes, { prefix: '/api/v1/leaderboard' });
-  await fastify.register(eventsRoutes, { prefix: '/api/v1/events' });
-  await fastify.register(roundsRoutes, { prefix: '/api/v1/rounds' });
-  await fastify.register(adminRoutes, { prefix: '/api/v1/admin' });
   await fastify.register(healthRoutes, { prefix: '/api/v1/health' });
   
   // Error handler

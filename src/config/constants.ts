@@ -16,6 +16,10 @@ export const CONSTANTS = {
   CHAIN_IDS: {
     ETHEREUM: 1,
     SONIC: 146,
+    BASE: 8453,
+    ARBITRUM: 42161,
+    AVALANCHE: 43114,
+    BERACHAIN: 81457, // Mainnet chain ID
   },
   
   // Event types

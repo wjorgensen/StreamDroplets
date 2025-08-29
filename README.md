@@ -67,62 +67,33 @@ Top addresses by droplet count
 }
 ```
 
-#### GET `/api/v1/events`
-Recent blockchain events (paginated)
-```json
-{
-  "events": [
-    {
-      "type": "Stake",
-      "address": "0x...",
-      "amount": "1000.0",
-      "timestamp": "2024-01-15T12:00:00Z",
-      "chain": "ethereum",
-      "vault": "xETH"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 10000
-  }
-}
-```
-
-#### GET `/api/v1/rounds`
-Round information
-```json
-{
-  "current_round": {
-    "round_number": 30,
-    "start_time": "2024-01-15T00:00:00Z",
-    "end_time": "2024-01-16T00:00:00Z",
-    "status": "active"
-  },
-  "total_rounds": 30
-}
-```
-
 #### GET `/api/v1/health`
 System health status
 ```json
 {
   "status": "healthy",
   "database": "connected",
-  "indexers": {
-    "ethereum": "synced",
-    "sonic": "synced"
-  }
+  "timestamp": "2024-01-15T12:00:00Z",
+  "service": "stream-droplets-api",
+  "version": "1.0.0"
 }
 ```
 
-### Admin Endpoints
+#### GET `/api/v1/health/ready`
+Readiness probe (for Kubernetes/Docker)
+```json
+{
+  "ready": true
+}
+```
 
-#### POST `/api/v1/admin/recalculate`
-Trigger droplet recalculation (requires ADMIN_API_KEY)
-
-#### POST `/api/v1/admin/backfill`
-Start historical backfill (requires ADMIN_API_KEY)
+#### GET `/api/v1/health/live`
+Liveness probe (for Kubernetes/Docker)
+```json
+{
+  "alive": true
+}
+```
 
 ## Setup Instructions
 
@@ -239,8 +210,9 @@ SONIC_CONFIRMATIONS=32
 # Droplets Configuration
 RATE_PER_USD_PER_ROUND=1  # 1 droplet per dollar per round
 
-# Admin API Key
-ADMIN_API_KEY=your_secure_admin_key
+# Logging
+LOG_LEVEL=info
+LOG_PRETTY=true
 ```
 
 ### Supported Vaults
