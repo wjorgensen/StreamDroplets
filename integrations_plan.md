@@ -176,19 +176,3 @@
 - This is an Aave‑style pool clone; the Pool proxy dispatches to implementation; the **aToken** is the receipt of deposits.
 
 ---
-
-## Snapshot & Indexer Checklist
-
-- **Address registry** (per above) – fill all **TBD** items as discovered.
-- **Indexers**
-  - ERC‑4626 indexer (generic)
-  - cToken/Aave indexer (generic)
-  - Uniswap V2 LP indexer (generic)
-  - *(Optional)* Uniswap V3 position indexer (generic)
-- **Data model**
-  - `positions`: `{ protocol, chainId, contract, kind, owner, size_shares, size_assets, updatedAt }`
-  - `ownership`: mirror of receipt/NFT ownership via `Transfer`
-  - `snapshots`: daily per owner USD TVL totals
-- **Pricing**
-  - For xUSD/USDC/scUSD: treat $1 until price feed is added
-  - For other x* (xETH/xBTC): integrate price feed when those integrations go live
