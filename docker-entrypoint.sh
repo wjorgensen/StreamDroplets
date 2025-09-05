@@ -26,20 +26,17 @@ BACKFILL_CHECK=$(PGPASSWORD=$DB_PASSWORD psql -h "$DB_HOST" -U "$DB_USER" -d "$D
 if [ "$BACKFILL_CHECK" = "0" ]; then
   echo "No existing data found. Running initial backfill..."
   
-  # Set start date for backfill (Feb 19, 2024)
-  export BACKFILL_START_DATE="2024-02-19"
-  
   # Run backfill for Ethereum mainnet
   echo "Backfilling Ethereum mainnet events..."
-  node dist/scripts/quick-backfill-stakes.js || echo "Ethereum backfill completed with warnings"
+  node dist/scripts/docker-backfill.js || echo "Ethereum backfill completed with warnings"
   
   # Populate cross-chain data
   echo "Populating cross-chain balances..."
-  node dist/scripts/quick-fetch-all-chains.js || echo "Cross-chain data populated with warnings"
+  node dist/scripts/docker-populate-chains.js || echo "Cross-chain data populated with warnings"
   
   # Generate historical droplets
   echo "Generating historical droplets..."
-  node dist/scripts/generate-all-historical-droplets.js || echo "Historical droplets generated with warnings"
+  node dist/scripts/docker-generate-droplets.js || echo "Historical droplets generated with warnings"
   
   echo "Initial backfill completed!"
 else
