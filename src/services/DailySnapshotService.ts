@@ -9,7 +9,6 @@ import { getDb } from '../db/connection';
 import { createLogger } from '../utils/logger';
 import { CONSTANTS, AssetType } from '../config/constants';
 import { TimelineOracleService } from '../oracle/TimelineOracleService';
-import { UnifiedBalanceService } from './UnifiedBalanceService';
 
 const logger = createLogger('DailySnapshotService');
 
@@ -30,12 +29,10 @@ interface DailySnapshot {
 export class DailySnapshotService {
   private db = getDb();
   private oracleService: TimelineOracleService;
-  private unifiedBalanceService: UnifiedBalanceService;
   private isProcessing = false;
   
   constructor() {
     this.oracleService = new TimelineOracleService();
-    this.unifiedBalanceService = new UnifiedBalanceService(this.db, this.oracleService);
   }
   private pendingBreakdown: Record<string, { shares: bigint, usd: bigint }> = {};
 
@@ -260,7 +257,7 @@ export class DailySnapshotService {
    */
   private async calculateIntegrationUsdValue(
     address: string,
-    snapshotTime: Date
+    _snapshotTime: Date
   ): Promise<bigint> {
     // Get all integration positions for the user with non-zero shares
     const positions = await this.db('integration_positions')
@@ -417,9 +414,9 @@ export class DailySnapshotService {
     logger.info(`Fetching oracle prices for ${dateStr} at ${priceTime.toISOString()}`);
     
     const [ethPrice, btcPrice, eurPrice] = await Promise.all([
-      this.oracleService.getPriceAtTimestamp(AssetType.xETH, priceTime),
-      this.oracleService.getPriceAtTimestamp(AssetType.xBTC, priceTime),
-      this.oracleService.getPriceAtTimestamp(AssetType.xEUR, priceTime),
+      this.oracleService.getPriceAtTimestamp('xETH', priceTime),
+      this.oracleService.getPriceAtTimestamp('xBTC', priceTime),
+      this.oracleService.getPriceAtTimestamp('xEUR', priceTime),
     ]);
     
     logger.info(`Oracle prices for ${dateStr}: ETH=$${Number(ethPrice) / 1e8}, BTC=$${Number(btcPrice) / 1e8}, EUR=$${Number(eurPrice) / 1e8}`);

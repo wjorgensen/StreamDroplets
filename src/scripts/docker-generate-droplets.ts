@@ -90,7 +90,7 @@ async function generateDroplets() {
     
     logger.info('');
     logger.info('Top 5 Droplet Earners:');
-    topEarners.rows.forEach((user, i) => {
+    topEarners.rows.forEach((user: any, i: number) => {
       logger.info(`  ${i + 1}. ${user.user_address.slice(0, 10)}... - ${Number(user.total_earned).toLocaleString()} droplets (${user.days_active} days)`);
     });
     

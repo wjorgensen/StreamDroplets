@@ -1,6 +1,6 @@
 import { getDb } from '../db/connection';
 import { createLogger } from '../utils/logger';
-import { createPublicClient, http, parseAbi, decodeEventLog } from 'viem';
+import { createPublicClient, http, decodeEventLog } from 'viem';
 import { mainnet } from 'viem/chains';
 import * as dotenv from 'dotenv';
 
@@ -110,14 +110,13 @@ async function runBackfill() {
                     asset: vault.symbol,
                     shares: eventData.args.shares.toString(),
                     last_block: Number(log.blockNumber),
-                    created_at: timestamp,
-                    updated_at: timestamp,
+                    last_updated: timestamp,
                   })
                   .onConflict(['address', 'chain_id', 'asset'])
                   .merge({
                     shares: db.raw('chain_share_balances.shares::numeric + ?', [eventData.args.shares.toString()]),
                     last_block: Number(log.blockNumber),
-                    updated_at: timestamp,
+                    last_updated: timestamp,
                   });
               } else if (log.topics[0] === '0xddd252950000000000000000000000000000000000000000000000000000000') {
                 // Unstake event
@@ -136,14 +135,13 @@ async function runBackfill() {
                     asset: vault.symbol,
                     shares: '0',
                     last_block: Number(log.blockNumber),
-                    created_at: timestamp,
-                    updated_at: timestamp,
+                    last_updated: timestamp,
                   })
                   .onConflict(['address', 'chain_id', 'asset'])
                   .merge({
                     shares: db.raw('GREATEST(0, chain_share_balances.shares::numeric - ?)', [eventData.args.shares.toString()]),
                     last_block: Number(log.blockNumber),
-                    updated_at: timestamp,
+                    last_updated: timestamp,
                   });
               } else if (log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
                 // Transfer event
@@ -165,7 +163,7 @@ async function runBackfill() {
                     .update({
                       shares: db.raw('GREATEST(0, shares::numeric - ?)', [eventData.args.value.toString()]),
                       last_block: Number(log.blockNumber),
-                      updated_at: timestamp,
+                      last_updated: timestamp,
                     });
                 }
                 
@@ -178,14 +176,13 @@ async function runBackfill() {
                       asset: vault.symbol,
                       shares: eventData.args.value.toString(),
                       last_block: Number(log.blockNumber),
-                      created_at: timestamp,
-                      updated_at: timestamp,
+                        last_updated: timestamp,
                     })
                     .onConflict(['address', 'chain_id', 'asset'])
                     .merge({
                       shares: db.raw('chain_share_balances.shares::numeric + ?', [eventData.args.value.toString()]),
                       last_block: Number(log.blockNumber),
-                      updated_at: timestamp,
+                      last_updated: timestamp,
                     });
                 }
               }

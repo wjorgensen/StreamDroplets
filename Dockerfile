@@ -34,8 +34,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/tsconfig.json ./
 
 # Copy database migrations and configuration
-COPY src/db/migrations ./src/db/migrations
-COPY src/db/knexfile.js ./src/db/knexfile.js
+COPY knexfile.prod.js ./knexfile.js
 
 # Copy startup script
 COPY docker-entrypoint.sh /usr/local/bin/

@@ -17,7 +17,7 @@ echo "PostgreSQL is ready!"
 # Run database migrations
 echo "Running database migrations..."
 cd /app
-npx knex migrate:latest --knexfile ./src/db/knexfile.js
+npx knex migrate:latest --knexfile ./knexfile.js --env production
 
 # Check if initial backfill is needed
 echo "Checking if initial backfill is required..."

@@ -134,7 +134,7 @@ async function populateChains() {
     `);
     
     let totalTVL = 0;
-    tvlSummary.rows.forEach(row => {
+    tvlSummary.rows.forEach((row: any) => {
       const tvl = Number(row.tvl);
       totalTVL += tvl;
       logger.info(`Chain ${row.chain_id}: $${tvl.toLocaleString()} TVL, ${row.users} users`);

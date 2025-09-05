@@ -6,7 +6,7 @@
 
 import { getDb } from '../db/connection';
 import { createLogger } from '../utils/logger';
-import { ChainlinkService } from '../oracle/ChainlinkService';
+// import { ChainlinkService } from '../oracle/ChainlinkService';
 import { CONSTANTS, AssetType } from '../config/constants';
 
 const logger = createLogger('RoundSnapshotService');
@@ -229,7 +229,7 @@ export class RoundSnapshotService {
   private async getTotalSharesAtRoundStart(
     address: string,
     asset: AssetType,
-    roundStart: Date
+    _roundStart: Date
   ): Promise<bigint> {
     // Get the balance from each chain at the round start time
     const balances = await this.db('chain_share_balances')

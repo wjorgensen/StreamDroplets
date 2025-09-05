@@ -1,11 +1,10 @@
 import { Knex } from 'knex';
 
 export async function up(knex: Knex): Promise<void> {
-  // Add share_price and usd_exposure columns to timeline_intervals
+  // Add share_price columns to timeline_intervals (usd_exposure already exists from migration 002)
   await knex.schema.alterTable('timeline_intervals', (table) => {
     table.string('share_price', 78).nullable();
     table.integer('share_price_scale').defaultTo(18);
-    table.string('usd_exposure', 78).nullable();
   });
   
   // Create balance_cache table for historical balance queries
@@ -42,13 +41,7 @@ export async function up(knex: Knex): Promise<void> {
     table.index(['asset', 'block_number']);
   });
   
-  // Add new chain configurations
-  await knex('chain_configurations').insert([
-    { chain_id: 8453, name: 'Base', confirmations: 6, batch_size: 1000 },
-    { chain_id: 42161, name: 'Arbitrum', confirmations: 6, batch_size: 1000 },
-    { chain_id: 43114, name: 'Avalanche', confirmations: 2, batch_size: 500 },
-    { chain_id: 81457, name: 'Berachain', confirmations: 32, batch_size: 500 },
-  ]).onConflict('chain_id').ignore();
+  // Note: chain_configurations table doesn't exist yet in this migration
 }
 
 export async function down(knex: Knex): Promise<void> {
@@ -60,11 +53,6 @@ export async function down(knex: Knex): Promise<void> {
   await knex.schema.alterTable('timeline_intervals', (table) => {
     table.dropColumn('share_price');
     table.dropColumn('share_price_scale');
-    table.dropColumn('usd_exposure');
+    // usd_exposure is managed by migration 002
   });
-  
-  // Remove new chain configurations
-  await knex('chain_configurations')
-    .whereIn('chain_id', [8453, 42161, 43114, 81457])
-    .delete();
 }

@@ -80,7 +80,7 @@ async function targetedIndex() {
       logger.error('Indexer error:', error);
     });
     
-    indexer.on('eventProcessed', async ({ eventName, contract, blockNumber }) => {
+    indexer.on('eventProcessed', async ({ eventName: _eventName, contract: _contract, blockNumber }) => {
       eventCount++;
       
       // Log progress every 5 seconds

@@ -92,7 +92,7 @@ export class TimelineOracleService {
       let high = latestBlock.number;
       
       // Average block time on Ethereum is ~12 seconds
-      const avgBlockTime = 12n;
+      // const _avgBlockTime = 12n;
       
       while (low <= high) {
         const mid = (low + high) / 2n;
@@ -257,7 +257,7 @@ export class TimelineOracleService {
         blockNumber: blockNumber,
       });
       
-      const [roundId, answer, startedAt, updatedAt, answeredInRound] = latestData as [bigint, bigint, bigint, bigint, bigint];
+      const [roundId, answer, _startedAt, updatedAt, _answeredInRound] = latestData as [bigint, bigint, bigint, bigint, bigint];
       
       // Log the fetched price for debugging
       logger.info(`Fetched ${asset} price at block ${blockNumber}: $${Number(answer) / 1e8} (round: ${roundId}, updated: ${new Date(Number(updatedAt) * 1000).toISOString()})`);

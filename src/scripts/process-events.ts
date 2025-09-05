@@ -61,12 +61,12 @@ async function processEvents() {
           'InstantUnstake': 'event InstantUnstake(address indexed account, uint256 amount, uint256 round)',
         };
         
-        for (const [name, signature] of Object.entries(eventSignatures)) {
+        for (const [name, _signature] of Object.entries(eventSignatures)) {
           try {
             decoded = decodeEventLog({
               abi: STREAM_VAULT_ABI,
-              data: log.data,
-              topics: log.topics as any,
+              data: log.data as `0x${string}`,
+              topics: log.topics as [signature: `0x${string}`, ...args: `0x${string}`[]],
             });
             
             if (decoded.eventName === name) {

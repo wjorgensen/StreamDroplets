@@ -2,9 +2,9 @@ import { startServer } from './api/server';
 import { createLogger } from './utils/logger';
 import { getDb, testConnection } from './db/connection';
 import { SchedulerService } from './services/SchedulerService';
-import { DailySnapshotService } from './services/DailySnapshotService';
-import { UnifiedBalanceService } from './services/UnifiedBalanceService';
-import { SimplePriceOracle } from './oracle/SimplePriceOracle';
+// import { DailySnapshotService } from './services/DailySnapshotService';
+// import { UnifiedBalanceService } from './services/UnifiedBalanceService';
+// import { SimplePriceOracle } from './oracle/SimplePriceOracle';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -27,13 +27,13 @@ async function startApplication() {
     
     // Initialize services
     logger.info('Initializing services...');
-    const priceOracle = new SimplePriceOracle();
-    const balanceService = new UnifiedBalanceService(db, priceOracle);
-    const snapshotService = new DailySnapshotService(db);
+    // const priceOracle = new SimplePriceOracle();
+    // const _balanceService = new UnifiedBalanceService(db, priceOracle);
+    // const _snapshotService = new DailySnapshotService();
     
     // Initialize scheduler for daily snapshots
     logger.info('Starting scheduler service...');
-    const scheduler = new SchedulerService(db);
+    const scheduler = new SchedulerService();
     await scheduler.start();
     
     // Start API server
