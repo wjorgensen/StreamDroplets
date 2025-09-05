@@ -1,15 +1,14 @@
 import type { Knex } from 'knex';
-import { config } from '../config';
 
 const knexConfig: { [key: string]: Knex.Config } = {
   development: {
     client: 'postgresql',
     connection: process.env.DATABASE_URL || {
-      host: config.database.host,
-      port: config.database.port,
-      database: config.database.name,
-      user: config.database.user,
-      password: config.database.password,
+      host: process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.DB_PORT || '5432'),
+      database: process.env.DB_NAME || 'stream_droplets',
+      user: process.env.DB_USER || 'wes',
+      password: process.env.DB_PASSWORD || '',
     },
     pool: {
       min: 2,
@@ -33,11 +32,11 @@ const knexConfig: { [key: string]: Knex.Config } = {
           ssl: { rejectUnauthorized: false }
         }
       : {
-          host: config.database.host,
-          port: config.database.port,
-          database: config.database.name,
-          user: config.database.user,
-          password: config.database.password,
+          host: process.env.DB_HOST || 'localhost',
+          port: parseInt(process.env.DB_PORT || '5432'),
+          database: process.env.DB_NAME || 'stream_droplets',
+          user: process.env.DB_USER || 'wes',
+          password: process.env.DB_PASSWORD || '',
         },
     pool: {
       min: 2,

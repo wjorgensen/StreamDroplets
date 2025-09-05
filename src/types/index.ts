@@ -104,8 +104,14 @@ export interface DropletsResult {
   droplets: string;
   lastUpdated: Date;
   breakdown?: {
-    [key in AssetType]?: string;
+    [key in AssetType | 'integrations']?: string;
   };
+  integrationDetails?: {
+    protocolId: number;
+    protocolName: string;
+    droplets: string;
+    usdValue: string;
+  }[];
 }
 
 export interface LeaderboardEntry {

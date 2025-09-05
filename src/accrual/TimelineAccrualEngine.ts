@@ -1,7 +1,6 @@
 import { getDb } from '../db/connection';
 import { AssetType } from '../config/constants';
 import { createLogger } from '../utils/logger';
-import { TimelineIndexer } from '../indexer/TimelineIndexer';
 // import { TimelineOracleService } from '../oracle/TimelineOracleService';
 import { DropletsResult } from '../types';
 
@@ -21,11 +20,9 @@ export interface DropletsIntegration {
 
 export class TimelineAccrualEngine {
   private db = getDb();
-  private timelineIndexer: TimelineIndexer;
   // private oracleService: TimelineOracleService;
   
   constructor() {
-    this.timelineIndexer = new TimelineIndexer();
     // this.oracleService = new TimelineOracleService();
   }
   
@@ -77,12 +74,8 @@ export class TimelineAccrualEngine {
     }
     
     // Calculate new droplets from timeline
-    const newDroplets = await this.timelineIndexer.calculateDropletsForRange(
-      address,
-      asset,
-      calculationStart,
-      calculationEnd
-    );
+    // TODO: Implement with new optimized indexer
+    const newDroplets = 0n; // await this.calculateDropletsForRange(address, asset, calculationStart, calculationEnd);
     
     // Add to cached total
     const totalDroplets = cached 
@@ -99,12 +92,13 @@ export class TimelineAccrualEngine {
    * Calculate droplets for a specific time range
    */
   async calculateDropletsForRange(
-    address: string,
-    asset: AssetType,
-    startTime: Date,
-    endTime: Date
+    _address: string,
+    _asset: AssetType,
+    _startTime: Date,
+    _endTime: Date
   ): Promise<bigint> {
-    return this.timelineIndexer.calculateDropletsForRange(address, asset, startTime, endTime);
+    // TODO: Implement with new optimized indexer
+    return 0n; // this.calculateDropletsForRange(address, asset, startTime, endTime);
   }
   
   /**

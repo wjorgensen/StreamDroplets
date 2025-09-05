@@ -10,9 +10,9 @@ const paramsSchema = z.object({
 });
 
 export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
-  // Use the regular AccrualEngine, not Timeline
-  const AccrualEngine = require('../../accrual/AccrualEngine').AccrualEngine;
-  const accrualEngine = new AccrualEngine();
+  // Use the simplified AccrualEngine that reads pre-calculated values
+  const SimplifiedAccrualEngine = require('../../accrual/SimplifiedAccrualEngine').SimplifiedAccrualEngine;
+  const accrualEngine = new SimplifiedAccrualEngine();
   
   /**
    * GET /points/:address

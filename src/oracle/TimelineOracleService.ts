@@ -45,6 +45,90 @@ export class TimelineOracleService {
   }
   
   /**
+   * Get USD price at a specific timestamp
+   */
+  async getPriceAtTimestamp(
+    asset: AssetType,
+    timestamp: Date,
+    chainId: number = CONSTANTS.CHAIN_IDS.ETHEREUM
+  ): Promise<bigint> {
+    // First check if we have a cached price near this timestamp (within 1 hour)
+    const oneHourBefore = new Date(timestamp.getTime() - 3600000);
+    const oneHourAfter = new Date(timestamp.getTime() + 3600000);
+    
+    const cached = await this.db('oracle_prices_timeline')
+      .where({ asset, chain_id: chainId })
+      .whereBetween('timestamp', [oneHourBefore, oneHourAfter])
+      .orderBy('timestamp', 'desc')
+      .first();
+    
+    if (cached) {
+      logger.debug(`Using cached price for ${asset} near ${timestamp.toISOString()}: $${Number(cached.price_usd) / 1e8}`);
+      return BigInt(cached.price_usd);
+    }
+    
+    // If no cached price, fetch the block at this timestamp and get price
+    const targetTimestamp = Math.floor(timestamp.getTime() / 1000);
+    
+    // Binary search to find the block at this timestamp
+    const block = await this.findBlockAtTimestamp(BigInt(targetTimestamp));
+    
+    if (block) {
+      return this.getPriceAtBlock(asset, block.number, chainId);
+    }
+    
+    // Fallback to current price if we can't find historical
+    logger.warn(`Could not find block at timestamp ${timestamp.toISOString()}, using current price`);
+    return this.getCurrentPrice(asset, chainId);
+  }
+  
+  /**
+   * Find block at a specific timestamp using binary search
+   */
+  private async findBlockAtTimestamp(targetTimestamp: bigint): Promise<{ number: bigint; timestamp: bigint } | null> {
+    try {
+      const latestBlock = await this.client.getBlock({ blockTag: 'latest' });
+      let low = 0n;
+      let high = latestBlock.number;
+      
+      // Average block time on Ethereum is ~12 seconds
+      const avgBlockTime = 12n;
+      
+      while (low <= high) {
+        const mid = (low + high) / 2n;
+        const block = await this.client.getBlock({ blockNumber: mid });
+        
+        if (block.timestamp === targetTimestamp) {
+          return block;
+        }
+        
+        if (block.timestamp < targetTimestamp) {
+          low = mid + 1n;
+        } else {
+          high = mid - 1n;
+        }
+        
+        // If we're close enough (within 1 block), return this block
+        if (high - low <= 1n) {
+          const lowBlock = await this.client.getBlock({ blockNumber: low });
+          const highBlock = await this.client.getBlock({ blockNumber: high });
+          
+          // Return the block closest to our target timestamp
+          const lowDiff = targetTimestamp > lowBlock.timestamp ? targetTimestamp - lowBlock.timestamp : lowBlock.timestamp - targetTimestamp;
+          const highDiff = targetTimestamp > highBlock.timestamp ? targetTimestamp - highBlock.timestamp : highBlock.timestamp - targetTimestamp;
+          
+          return lowDiff < highDiff ? lowBlock : highBlock;
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      logger.error(`Error finding block at timestamp ${targetTimestamp}:`, error);
+      return null;
+    }
+  }
+  
+  /**
    * Get USD price at a specific block number
    */
   async getPriceAtBlock(
@@ -62,18 +146,22 @@ export class TimelineOracleService {
       .first();
     
     if (existing) {
+      logger.debug(`Using cached price for ${asset} at block ${blockNumber}: $${Number(existing.price_usd) / 1e8}`);
       return BigInt(existing.price_usd);
     }
     
     // Fetch from Chainlink
     const price = await this.fetchPriceAtBlock(asset, blockNumber);
     
+    // Get the actual block timestamp
+    const block = await this.client.getBlock({ blockNumber });
+    
     // Store in database
     await this.storePriceTimeline({
       asset,
       chain_id: _chainId,
       block_number: blockNumber,
-      timestamp: new Date(), // This should be the block timestamp
+      timestamp: new Date(Number(block.timestamp) * 1000),
       price_usd: price.toString(),
       source: 'chainlink'
     });
@@ -169,7 +257,11 @@ export class TimelineOracleService {
         blockNumber: blockNumber,
       });
       
-      const [, answer] = latestData as [bigint, bigint, bigint, bigint, bigint];
+      const [roundId, answer, startedAt, updatedAt, answeredInRound] = latestData as [bigint, bigint, bigint, bigint, bigint];
+      
+      // Log the fetched price for debugging
+      logger.info(`Fetched ${asset} price at block ${blockNumber}: $${Number(answer) / 1e8} (round: ${roundId}, updated: ${new Date(Number(updatedAt) * 1000).toISOString()})`);
+      
       return answer;
       
     } catch (error) {

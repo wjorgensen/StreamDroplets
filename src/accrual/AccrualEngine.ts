@@ -4,6 +4,7 @@ import { CONSTANTS, AssetType } from '../config/constants';
 import { createLogger } from '../utils/logger';
 import { DropletsResult, Round, BalanceSnapshot } from '../types';
 import { ChainlinkService } from '../oracle/ChainlinkService';
+import { IntegrationAccrualEngine } from './IntegrationAccrualEngine';
 // import { BalanceTracker } from '../indexer/BalanceTracker';
 
 const logger = createLogger('AccrualEngine');
@@ -11,17 +12,19 @@ const logger = createLogger('AccrualEngine');
 export class AccrualEngine {
   private db = getDb();
   private oracleService: ChainlinkService;
+  private integrationEngine: IntegrationAccrualEngine;
   // private balanceTracker: BalanceTracker;
   private ratePerUsdPerRound: bigint;
   
   constructor() {
     this.oracleService = new ChainlinkService();
+    this.integrationEngine = new IntegrationAccrualEngine();
     // this.balanceTracker = new BalanceTracker();
     this.ratePerUsdPerRound = BigInt(config.droplets.ratePerUsdPerRound);
   }
   
   /**
-   * Calculates total droplets for an address across all assets
+   * Calculates total droplets for an address across all assets and integrations
    */
   async calculateDroplets(address: string): Promise<DropletsResult> {
     // Check if address is excluded
@@ -37,6 +40,7 @@ export class AccrualEngine {
           xBTC: '0',
           xUSD: '0',
           xEUR: '0',
+          integrations: '0',
         },
       };
     }
@@ -45,11 +49,18 @@ export class AccrualEngine {
     const breakdown: Record<string, string> = {};
     let totalDroplets = 0n;
     
+    // Calculate droplets from direct vault holdings
     for (const asset of assets) {
       const assetDroplets = await this.calculateDropletsForAsset(address, asset);
       breakdown[asset] = assetDroplets.toString();
       totalDroplets += assetDroplets;
     }
+    
+    // Calculate droplets from integration protocols
+    const integrationResult = await this.integrationEngine.calculateIntegrationDroplets(address);
+    const integrationDroplets = BigInt(integrationResult.totalDroplets);
+    breakdown['integrations'] = integrationDroplets.toString();
+    totalDroplets += integrationDroplets;
     
     // Update cache
     const lastUpdated = new Date();
@@ -62,6 +73,7 @@ export class AccrualEngine {
       droplets: totalDroplets.toString(),
       lastUpdated,
       breakdown,
+      integrationDetails: integrationResult.breakdown, // Optional: include detailed breakdown
     };
   }
   
