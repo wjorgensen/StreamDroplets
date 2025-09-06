@@ -14,11 +14,7 @@ const logger = createLogger('AlchemyOptimizedIndexer');
 
 // Event signatures for filtering
 const EVENT_SIGNATURES = {
-  // ERC-4626 Vault events (what StreamVaults actually use)
-  Deposit: parseAbiItem('event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)'),
-  Withdraw: parseAbiItem('event Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)'),
-  
-  // Legacy events (for backward compatibility)
+  // Stream Vault custom events
   Stake: parseAbiItem('event Stake(address indexed account, uint256 amount, uint256 round)'),
   Unstake: parseAbiItem('event Unstake(address indexed account, uint256 amount, uint256 round)'),
   Redeem: parseAbiItem('event Redeem(address indexed account, uint256 share, uint256 round)'),
@@ -311,9 +307,9 @@ export class AlchemyOptimizedIndexer extends EventEmitter {
    * Process a single event log
    */
   private async processEventLog(log: any, contract: IndexerConfig['contracts'][0]): Promise<void> {
+    let eventName = 'Unknown';
     try {
       // Decode the event log
-      let eventName = 'Unknown';
       let decodedLog: any = null;
       
       // Try to decode against known event signatures
@@ -328,6 +324,7 @@ export class AlchemyOptimizedIndexer extends EventEmitter {
           break;
         } catch {
           // Not this event type, try next
+          continue;
         }
       }
       
@@ -358,10 +355,10 @@ export class AlchemyOptimizedIndexer extends EventEmitter {
     } catch (error: any) {
       logger.error(`Error processing event log: ${error.message}`, {
         error: error.stack,
-        eventName,
+        eventName: eventName,
         blockNumber: log.blockNumber,
         transactionHash: log.transactionHash,
-        contract: contract.name
+        contract: contract.symbol
       });
     }
   }
@@ -381,68 +378,6 @@ export class AlchemyOptimizedIndexer extends EventEmitter {
     const timestamp = new Date(); // You might want to fetch actual block timestamp
     
     switch (eventName) {
-      case 'Deposit':
-        // ERC-4626 Deposit event: User deposits assets and receives shares
-        // Update chain_share_balances with the new shares
-        const depositShares = args.shares.toString();
-        const currentDepositBalance = await this.db('chain_share_balances')
-          .where({
-            chain_id: contract.chainId,
-            address: args.owner.toLowerCase(),
-            asset: contract.symbol,
-          })
-          .first();
-        
-        if (currentDepositBalance) {
-          await this.db('chain_share_balances')
-            .where({ id: currentDepositBalance.id })
-            .update({
-              shares: (BigInt(currentDepositBalance.shares) + BigInt(depositShares)).toString(),
-              last_block: blockNumber,
-              last_updated: timestamp,
-            });
-        } else {
-          await this.db('chain_share_balances').insert({
-            chain_id: contract.chainId,
-            address: args.owner.toLowerCase(),
-            asset: contract.symbol,
-            shares: depositShares,
-            last_block: blockNumber,
-            last_updated: timestamp,
-          });
-        }
-        break;
-        
-      case 'Withdraw':
-        // ERC-4626 Withdraw event: User withdraws assets and burns shares
-        const withdrawShares = args.shares.toString();
-        const currentWithdrawBalance = await this.db('chain_share_balances')
-          .where({
-            chain_id: contract.chainId,
-            address: args.owner.toLowerCase(),
-            asset: contract.symbol,
-          })
-          .first();
-        
-        if (currentWithdrawBalance) {
-          const newBalance = BigInt(currentWithdrawBalance.shares) - BigInt(withdrawShares);
-          if (newBalance > 0n) {
-            await this.db('chain_share_balances')
-              .where({ id: currentWithdrawBalance.id })
-              .update({
-                shares: newBalance.toString(),
-                last_block: blockNumber,
-                last_updated: timestamp,
-              });
-          } else {
-            // Remove if balance is 0
-            await this.db('chain_share_balances')
-              .where({ id: currentWithdrawBalance.id })
-              .delete();
-          }
-        }
-        break;
-        
       case 'Stake':
         // User stakes assets and receives shares in the vault
         // We track this as a balance increase
