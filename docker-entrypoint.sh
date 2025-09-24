@@ -14,39 +14,17 @@ done
 
 echo "PostgreSQL is ready!"
 
-# Run database migrations
-echo "Running database migrations..."
-cd /app
-npx knex migrate:latest --knexfile ./knexfile.js --env production
-
-# Check if initial backfill is needed
-echo "Checking if initial backfill is required..."
-BACKFILL_CHECK=$(PGPASSWORD=$DB_PASSWORD psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM events;" 2>/dev/null | xargs)
-
-if [ "$BACKFILL_CHECK" = "0" ]; then
-  echo "No existing data found. Running initial backfill..."
-  
-  # Run backfill for Ethereum mainnet
-  echo "Backfilling Ethereum mainnet events..."
-  node dist/scripts/docker-backfill.js || echo "Ethereum backfill completed with warnings"
-  
-  # Populate cross-chain data
-  echo "Populating cross-chain balances..."
-  node dist/scripts/docker-populate-chains.js || echo "Cross-chain data populated with warnings"
-  
-  # Generate historical droplets
-  echo "Generating historical droplets..."
-  node dist/scripts/docker-generate-droplets.js || echo "Historical droplets generated with warnings"
-  
-  echo "Initial backfill completed!"
-else
-  echo "Existing data found ($BACKFILL_CHECK events). Skipping backfill."
-fi
-
-# Start the application
 echo "========================================="
-echo "Starting Stream Droplets API and Services..."
+echo "Starting Stream Droplets Application..."
 echo "========================================="
+echo ""
+echo "The MainOrchestrator will handle:"
+echo "  - Database migrations"
+echo "  - Historical backfill processing"
+echo "  - Real-time snapshot processing"
+echo "  - API server initialization"
+echo ""
+echo "Starting application..."
 
 # Run the main application
 exec "$@"

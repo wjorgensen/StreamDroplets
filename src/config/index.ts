@@ -1,59 +1,51 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import { CONSTANTS } from './constants';
 
 dotenv.config();
 
 const configSchema = z.object({
-  // Database
+  // Database - only password comes from env, rest from constants
   database: z.object({
-    host: z.string().default('localhost'),
-    port: z.number().default(5432),
-    name: z.string().default('stream_droplets'),
-    user: z.string().default('postgres'),
-    password: z.string().default('postgres'),
+    host: z.string(),
+    port: z.number(),
+    name: z.string(),
+    user: z.string(),
+    password: z.string(),
   }),
   
-  // RPC
-  rpc: z.object({
-    ethereum: z.string().url(),
-    sonic: z.string().url(),
-    // Multi-key support
-    apiKeys: z.array(z.string()).optional(),
-    ethBaseUrl: z.string().optional(),
-    sonicBaseUrl: z.string().optional(),
+  // API Keys - sensitive values from environment
+  apiKeys: z.object({
+    alchemy: z.string(),
+    alchemyFallback: z.string().optional(),
+    royco: z.string(),
   }),
   
-  // API
+  // API - configuration from constants
   api: z.object({
-    port: z.number().default(3000),
-    host: z.string().default('0.0.0.0'),
-    rateLimit: z.number().default(100),
+    port: z.number(),
+    host: z.string(),
+    rateLimit: z.number(),
   }),
   
-  // Indexer
+  // Indexer - configuration from constants
   indexer: z.object({
-    batchSize: z.number().default(100),
-    pollInterval: z.number().default(10000),
-    ethConfirmations: z.number().default(12),
-    sonicConfirmations: z.number().default(32),
+    batchSize: z.number(),
+    pollInterval: z.number(),
+    ethConfirmations: z.number(),
+    sonicConfirmations: z.number(),
   }),
   
-  // Droplets
-  droplets: z.object({
-    ratePerUsdPerRound: z.string().default('1'),
-  }),
-  
-  // Logging
+  // Logging - configuration from constants
   logging: z.object({
-    level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-    pretty: z.boolean().default(true),
+    level: z.enum(['debug', 'info', 'warn', 'error']),
+    pretty: z.boolean(),
   }),
 });
 
 export type Config = z.infer<typeof configSchema>;
 
 function loadConfig(): Config {
-  // If DATABASE_URL is set, ignore individual DB_* variables
   const config = {
     database: process.env.DATABASE_URL ? {
       // Use dummy values when DATABASE_URL is set since they won't be used
@@ -63,41 +55,32 @@ function loadConfig(): Config {
       user: 'using-database-url',
       password: 'using-database-url',
     } : {
-      // Only use individual variables if DATABASE_URL is not set
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '5432'),
-      name: process.env.DB_NAME || 'stream_droplets',
-      user: process.env.DB_USER || 'postgres',
+      // Read all database config from environment variables, fall back to constants
+      host: process.env.DB_HOST || CONSTANTS.DATABASE.HOST,
+      port: parseInt(process.env.DB_PORT || '') || CONSTANTS.DATABASE.PORT,
+      name: process.env.DB_NAME || CONSTANTS.DATABASE.NAME,
+      user: process.env.DB_USER || CONSTANTS.DATABASE.USER,
       password: process.env.DB_PASSWORD || '',
     },
-    rpc: {
-      ethereum: process.env.ALCHEMY_ETH_RPC || 'https://eth-mainnet.g.alchemy.com/v2/demo',
-      sonic: process.env.ALCHEMY_SONIC_RPC || 'https://sonic-mainnet.g.alchemy.com/v2/demo',
-      apiKeys: [
-        process.env.ALCHEMY_API_KEY_1,
-        process.env.ALCHEMY_API_KEY_2,
-        process.env.ALCHEMY_API_KEY_3,
-      ].filter(key => key && key !== 'your_second_api_key_here' && key !== 'your_third_api_key_here') as string[],
-      ethBaseUrl: process.env.ALCHEMY_ETH_BASE_URL,
-      sonicBaseUrl: process.env.ALCHEMY_SONIC_BASE_URL,
+    apiKeys: {
+      alchemy: process.env.ALCHEMY_API_KEY || '',
+      alchemyFallback: process.env.ALCHEMY_API_KEY_2,
+      royco: process.env.ROYCO_API_KEY || '',
     },
     api: {
-      port: parseInt(process.env.PORT || process.env.API_PORT || '3000'),
-      host: process.env.API_HOST || '0.0.0.0',
-      rateLimit: parseInt(process.env.API_RATE_LIMIT || '100'),
+      port: parseInt(process.env.PORT || '') || CONSTANTS.API.PORT,
+      host: CONSTANTS.API.HOST,
+      rateLimit: CONSTANTS.API.RATE_LIMIT,
     },
     indexer: {
-      batchSize: parseInt(process.env.INDEXER_BATCH_SIZE || '100'),
-      pollInterval: parseInt(process.env.INDEXER_POLL_INTERVAL || '10000'),
-      ethConfirmations: parseInt(process.env.ETH_CONFIRMATIONS || '12'),
-      sonicConfirmations: parseInt(process.env.SONIC_CONFIRMATIONS || '32'),
-    },
-    droplets: {
-      ratePerUsdPerRound: process.env.RATE_PER_USD_PER_ROUND || '1000000000000000000',
+      batchSize: CONSTANTS.INDEXER.BATCH_SIZE,
+      pollInterval: CONSTANTS.INDEXER.POLL_INTERVAL,
+      ethConfirmations: CONSTANTS.INDEXER.ETH_CONFIRMATIONS,
+      sonicConfirmations: CONSTANTS.INDEXER.SONIC_CONFIRMATIONS,
     },
     logging: {
-      level: (process.env.LOG_LEVEL as any) || 'info',
-      pretty: process.env.LOG_PRETTY === 'true',
+      level: (process.env.LOG_LEVEL as any) || CONSTANTS.LOGGING.LEVEL,
+      pretty: process.env.LOG_PRETTY === 'true' || CONSTANTS.LOGGING.PRETTY,
     },
   };
   

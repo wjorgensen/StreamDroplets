@@ -1,351 +1,386 @@
-# Stream Droplets Tracker
+# StreamDroplets API
 
 ## Overview
 
-Stream Droplets is a multi-chain liquidity rewards system that tracks USD value across Stream Protocol vaults and cross-chain deployments. The system:
+StreamDroplets is a multi-chain indexing and rewards system that tracks user balances across Stream Protocol's vault contracts and integration protocols. The system processes blockchain events, calculates user positions, fetches real-time price data, and awards "droplets" based on USD value held.
 
-- **Multi-chain Support**: Ethereum mainnet vaults + 5 cross-chain deployments (Sonic, Base, Arbitrum, Avalanche, Berachain)
-- **Unified USD Tracking**: Calculates single USD value per user across all chains
-- **Daily Accumulation**: Awards 1 droplet per $1 USD exposure per 24-hour period
-- **Integration Exclusion**: Automatically excludes integration contracts and custody addresses
-- **Real-time APIs**: RESTful endpoints for querying balances and leaderboards
+The system operates across 6 blockchains (Ethereum, Sonic, Base, Arbitrum, Avalanche, Berachain) and integrates with multiple DeFi protocols including Shadow Exchange, Euler Finance, Enclabs, Stability Protocol, Royco, and Silo Finance.
 
-## System Architecture
+## Architecture
 
-### Core Components
+### Key Components
 
-1. **Multi-Chain Indexer** - Monitors events across 6 blockchains simultaneously
-2. **Unified Balance Service** - Aggregates USD value across all chains and assets
-3. **Accrual Engine** - Daily droplet calculation based on total USD exposure
-4. **Oracle Service** - Price feeds for accurate USD conversion
-5. **API Server** - RESTful endpoints for data access
-6. **PostgreSQL Database** - Persistent storage with optimized schema
+#### MainOrchestrator
+The primary orchestration service that coordinates the entire indexing system. It handles:
+- Historical backfill from deployment dates to current
+- Real-time daily snapshots triggered at 12:05 AM EST
+- Progress tracking via database cursors
+- Block range calculation for multi-chain processing
+- Chain synchronization and validation
 
-### Supported Chains & Assets
+#### DailySnapshotService
+The core processing engine that creates daily user and protocol snapshots. Responsibilities include:
+- Coordinating vault and integration event processing
+- Fetching price data from Chainlink oracles
+- Calculating user balances and USD values
+- Computing droplet rewards (1 droplet per USD per day)
+- Creating comprehensive daily snapshots for users and protocol totals
+- Transfer validation and retry logic
 
-**Ethereum Mainnet (Chain 1)**
-- Vault shares: xETH, xBTC, xUSD, xEUR
-- Users hold shares, not tokens directly
+#### VaultIndexer
+Processes events from Stream Protocol's vault contracts across all supported chains:
+- Handles Deposit, Withdraw, and Transfer events
+- Tracks share balances and underlying asset amounts
+- Updates real-time balance tracking in the database
+- Supports all vault types: xETH, xBTC, xUSD, xEUR
 
-**Cross-Chain Deployments**
-- Sonic (Chain 146)
-- Base (Chain 8453)
-- Arbitrum (Chain 42161)
-- Avalanche (Chain 43114)
-- Berachain (Chain 81457)
-- OFT tokens: streamETH, streamBTC, streamUSD, streamEUR
+#### IntegrationIndexer
+Coordinates event processing across multiple integration protocols:
+- **Shadow Exchange**: DEX liquidity pool tracking on Sonic
+- **Euler Finance**: Vault deposits and yield accrual on Sonic
+- **Enclabs**: Lending protocol integration on Sonic
+- **Stability Protocol**: Stability pool participation on Sonic
+- **Royco**: Market-making protocol integration via API on Sonic
+- **Silo Finance**: Isolated lending markets on Sonic and Avalanche
 
-### How Droplets Are Calculated
+Each integration has its own balance tracker that handles protocol-specific logic and price-per-share calculations.
 
-1. **Balance Aggregation**: System tracks vault shares (ETH) and token balances (other chains)
-2. **USD Conversion**: All positions converted to USD using oracle prices
-3. **Daily Snapshots**: Taken every 24 hours at consistent times
-4. **Droplet Award**: 1 droplet per $1 USD exposure per day
-5. **Accumulation**: Droplets accumulate daily (TVL × days invested)
+#### ChainlinkService
+Fetches real-time price data for all supported assets:
+- Retrieves ETH, BTC, USDC, and EUR prices at specific block numbers
+- Uses Chainlink price feeds on Ethereum mainnet
+- Ensures consistent pricing across all chains and snapshots
 
-### Integration Contract Handling
+### System Flow
 
-The system automatically excludes:
-- Vault contract addresses themselves
-- Integration pool contracts (Velodrome, Aerodrome, etc.)
-- System addresses and custody contracts
-- Any address in the `excluded_addresses` table
+1. **MainOrchestrator** starts and initializes all chain connections
+2. **Historical Backfill**: Processes all days from deployment to current, calculating block ranges for each chain
+3. **Daily Processing**: Each day, the system:
+   - Calculates block ranges for end-of-day on all chains
+   - **VaultIndexer** processes vault events across all chains
+   - **IntegrationIndexer** processes integration events on Sonic/Avalanche
+   - Updates integration balances with current exchange rates
+   - **ChainlinkService** fetches price data at end-of-day blocks
+   - **DailySnapshotService** creates user and protocol snapshots
+   - Validates transfer consistency and retries if needed
+4. **Real-time Mode**: Runs daily at 12:05 AM EST to process previous day's data
 
-## Docker Deployment
+## Setup Instructions
 
-### Quick Start
+### 1. Environment Variables
+
+Copy the example environment file and configure your API keys:
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd stream-droplets
-
-# Copy environment variables
 cp .env.example .env
-# Edit .env with your configuration
-
-# Build and run with Docker Compose
-docker-compose up -d
-
-# Check logs
-docker-compose logs -f app
-
-# Verify API is running
-curl http://localhost:3000/api/v1/health
 ```
 
-### Docker Features
+Edit `.env` with your actual values:
+```env
+# Required API Keys
+ALCHEMY_API_KEY=your_alchemy_api_key_here
+ROYCO_API_KEY=your_royco_api_key_here
 
-- **Auto-initialization**: Database setup and migrations on first run
-- **Idempotent Backfill**: Checks existing data to avoid duplicates
-- **Health Checks**: Built-in liveness and readiness probes
-- **Auto-restart**: Recovers from failures automatically
-- **Volume Persistence**: Database data persists across container restarts
+# Database password
+DB_PASSWORD=your_secure_password_here
+```
+
+**Required Services:**
+- **Alchemy API Key**: Get from [alchemy.com](https://alchemy.com) - needs access to all supported chains (Ethereum, Sonic, Base, Arbitrum, Avalanche, Berachain)
+- **Royco API Key**: Get from Royco Protocol for market data access
+
+### 2. Configuration Review
+
+#### Check Settings in `src/config/constants.ts`
+
+Review the `CONSTANTS` object for any adjustments needed:
+
+```typescript
+export const CONSTANTS = {
+  /** Droplet calculation settings */
+  DROPLET_USD_RATIO: 1, // 1 droplet per USD per day
+  
+  /** API retry configuration */
+  MAX_ALCHEMY_RETRIES: 5,
+  MAX_ROYCO_API_RETRIES: 10,
+  
+  /** Database configuration */
+  DATABASE: {
+    HOST: 'localhost',
+    PORT: 5432,
+    NAME: 'stream_droplets',
+    USER: 'stream',
+  },
+  
+  /** API server configuration */
+  API: {
+    PORT: 3000,
+    HOST: '0.0.0.0',
+  },
+}
+```
+
+#### Verify Contract Addresses in `src/config/contracts.ts`
+
+Double-check the contract configurations for accuracy:
+
+- **CONTRACTS**: Stream vault addresses across all chains
+- **INTEGRATION_CONTRACTS**: Integration protocol addresses
+- **DEPLOYMENT_INFO**: Deployment dates and starting blocks
+
+Key sections to verify:
+- Vault addresses for each chain
+- Oracle feed addresses for price data
+- Integration contract addresses
+- Deployment blocks and dates
+
+### 3. Docker Deployment
+
+The system is containerized for easy deployment:
+
+```bash
+# Start the complete system (database + API + indexer)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop the system
+docker compose down
+```
+
+The Docker setup includes:
+- PostgreSQL database with automatic migrations
+- Node.js application container
+- Automatic dependency installation
+- Environment variable injection
+- Health checks and restart policies
+
+### 4. Monitoring
+
+After startup, monitor the system:
+
+```bash
+# Check system health
+curl http://localhost:3000/api/v1/health
+
+# View indexer progress in logs
+docker compose logs -f stream-droplets
+
+# Check database connectivity
+docker compose exec db psql -U stream -d stream_droplets -c "SELECT COUNT(*) FROM daily_snapshots;"
+```
+
+The system will automatically:
+1. Run database migrations
+2. Initialize chain connections
+3. Start historical backfill if needed
+4. Begin real-time processing
+5. Serve API endpoints
+
+## Database Schema
+
+The system maintains several key tables:
+- `share_balances`: Current user balances across vault contracts
+- `integration_balances`: User balances in integration protocols  
+- `user_daily_snapshots`: Daily user balance and droplet snapshots
+- `daily_snapshots`: Protocol-wide daily snapshots
+- `daily_events`: Raw blockchain events processed
+- `progress_cursors`: Chain indexing progress tracking
 
 ## API Endpoints
 
-### Public Endpoints
+### Address Balance
 
-#### GET `/api/v1/points/:address`
-Get total droplets for an address across all chains
+#### GET `/api/v1/addressBalance/:address`
+Returns the latest user daily snapshot for an address with optional field filtering.
+
+**Parameters:**
+- `address` (path): Ethereum address (0x...)
+- `fields` (query, optional): Comma-separated list of fields to return
+
+**Example Request:**
+```bash
+# Get all data
+GET /api/v1/addressBalance/0x1234567890123456789012345678901234567890
+
+# Get only total droplets
+GET /api/v1/addressBalance/0x1234567890123456789012345678901234567890?fields=totalDroplets
+
+# Get multiple specific fields
+GET /api/v1/addressBalance/0x1234567890123456789012345678901234567890?fields=totalDroplets,balances,totalUsdValue
+```
+
+**Response:**
 ```json
 {
-  "address": "0x...",
-  "total_droplets": "156789",
-  "breakdown": {
-    "ethereum": "50000",
-    "sonic": "35000",
-    "base": "30000",
-    "arbitrum": "20000",
-    "avalanche": "15000",
-    "berachain": "6789"
+  "address": "0x1234567890123456789012345678901234567890",
+  "snapshotDate": "2024-09-22",
+  "totalDroplets": "156789",
+  "dailyDropletsEarned": "1250",
+  "totalUsdValue": "1250.00",
+  "balances": {
+    "xeth": {
+      "shares": "0.5",
+      "usdValue": "800.00"
+    },
+    "xbtc": {
+      "shares": "0.01", 
+      "usdValue": "450.00"
+    },
+    "xusd": {
+      "shares": "0",
+      "usdValue": "0"
+    },
+    "xeur": {
+      "shares": "0",
+      "usdValue": "0"
+    }
   },
-  "last_updated": "2025-01-15T12:00:00Z"
+  "integrationBreakdown": {
+    "enclabs": "500.00",
+    "euler": "300.00"
+  },
+  "snapshotTimestamp": "2024-09-22T00:00:00.000Z"
 }
 ```
+
+### Leaderboard
 
 #### GET `/api/v1/leaderboard`
-Top addresses by total droplets earned
+Returns leaderboard of addresses ranked by total droplets earned, including users who may have withdrawn funds but earned droplets historically.
+
+**Query Parameters:**
+- `limit` (optional): Number of results to return (default: 100, max: 1000)
+- `offset` (optional): Number of results to skip (default: 0)
+
+**Example Request:**
+```bash
+GET /api/v1/leaderboard?limit=50&offset=0
+```
+
+**Response:**
 ```json
 {
-  "leaderboard": [
+  "data": [
     {
       "rank": 1,
-      "address": "0x...",
-      "total_droplets": "5678900",
-      "days_active": 150,
-      "avg_daily": "37859"
+      "address": "0x1234567890123456789012345678901234567890",
+      "totalDroplets": "5678900",
+      "lastActive": "2024-09-22",
+      "totalUsdValue": "2500.00",
+      "balances": {
+        "xeth": {
+          "shares": "1.5",
+          "usdValue": "2000.00"
+        },
+        "xbtc": {
+          "shares": "0.01",
+          "usdValue": "500.00"
+        },
+        "xusd": {
+          "shares": "0",
+          "usdValue": "0"
+        },
+        "xeur": {
+          "shares": "0", 
+          "usdValue": "0"
+        }
+      },
+      "integrationBreakdown": {
+        "enclabs": "1000.00",
+        "euler": "500.00"
+      }
     }
   ],
-  "total_participants": 1071,
-  "total_droplets_awarded": "234567890"
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "total": 1071,
+    "hasMore": true
+  }
 }
 ```
 
-#### GET `/api/v1/tvl`
-Current total value locked across all chains
+### Protocol Stats
+
+#### GET `/api/v1/protocolStats`
+Returns latest or historical daily protocol snapshots.
+
+**Query Parameters:**
+- `timestamp` (optional): ISO timestamp to get historical data (returns snapshot from day before timestamp)
+
+**Example Requests:**
+```bash
+# Get latest protocol stats
+GET /api/v1/protocolStats
+
+# Get historical protocol stats (returns Sept 4th snapshot for Sept 5th timestamp)
+GET /api/v1/protocolStats?timestamp=2024-09-05T12:00:00Z
+```
+
+**Response:**
 ```json
 {
-  "total_tvl": "157090247",
-  "breakdown": {
-    "ethereum": "107090247",
-    "sonic": "15000000",
-    "base": "12000000",
-    "arbitrum": "10000000",
-    "avalanche": "8000000",
-    "berachain": "5000000"
+  "id": 123,
+  "snapshotDate": "2024-09-22",
+  "totalProtocolUsd": "157090247.50",
+  "totalXethShares": "50000.0",
+  "totalXethUsd": "80000000.00",
+  "totalXbtcShares": "1000.0", 
+  "totalXbtcUsd": "65000000.00",
+  "totalXusdShares": "10000000.0",
+  "totalXusdUsd": "10000000.00",
+  "totalXeurShares": "2000000.0",
+  "totalXeurUsd": "2090247.50",
+  "totalIntegrationBreakdown": {
+    "enclabs": "50000000.00",
+    "euler": "30000000.00",
+    "silo": "20000000.00"
   },
-  "last_updated": "2025-01-15T12:00:00Z"
+  "totalUsers": 1071,
+  "dailyProtocolDroplets": "157090247",
+  "totalProtocolDroplets": "23563786205",
+  "ethUsdPrice": "2500.00",
+  "btcUsdPrice": "65000.00",
+  "eurUsdPrice": "1.05",
+  "snapshotTimestamp": "2024-09-22T00:00:00.000Z",
+  "createdAt": "2024-09-22T01:00:00.000Z"
 }
 ```
 
 ### Health Endpoints
 
 #### GET `/api/v1/health`
-Comprehensive health status
+Returns comprehensive service health status.
+
+**Response:**
 ```json
 {
   "status": "healthy",
+  "timestamp": "2024-09-22T12:00:00.000Z",
   "database": "connected",
-  "chains_synced": 6,
-  "last_snapshot": "2025-01-15T00:00:00Z",
+  "service": "stream-droplets-api",
   "version": "1.0.0"
 }
 ```
 
 #### GET `/api/v1/health/ready`
-Kubernetes readiness probe
+Kubernetes readiness probe endpoint.
+
+**Response:**
+```json
+{
+  "ready": true
+}
+```
 
 #### GET `/api/v1/health/live`
-Kubernetes liveness probe
+Kubernetes liveness probe endpoint.
 
-## Configuration
-
-### Environment Variables
-
-```env
-# Database Configuration
-DB_HOST=postgres
-DB_PORT=5432
-DB_NAME=stream_droplets
-DB_USER=stream
-DB_PASSWORD=your_secure_password
-
-# RPC Endpoints - Alchemy API Keys
-ALCHEMY_API_KEY_1=your_primary_key
-ALCHEMY_API_KEY_2=your_secondary_key
-ALCHEMY_API_KEY_3=your_tertiary_key
-
-# Chain RPC Base URLs
-ALCHEMY_ETH_BASE_URL=https://eth-mainnet.g.alchemy.com/v2/
-ALCHEMY_SONIC_BASE_URL=https://sonic-mainnet.g.alchemy.com/v2/
-ALCHEMY_BASE_URL=https://base-mainnet.g.alchemy.com/v2/
-ALCHEMY_ARB_URL=https://arb-mainnet.g.alchemy.com/v2/
-ALCHEMY_AVAX_URL=https://avax-mainnet.g.alchemy.com/v2/
-ALCHEMY_BERA_RPC=https://berachain-mainnet.g.alchemy.com/v2/
-
-# API Configuration
-API_PORT=3000
-API_HOST=0.0.0.0
-
-# Droplets Configuration  
-RATE_PER_USD_PER_ROUND=1
-
-# Contract Addresses
-# See .env.example for full list of vault and OFT addresses
+**Response:**
+```json
+{
+  "alive": true
+}
 ```
-
-## Database Schema
-
-### Core Tables
-
-- **chain_share_balances**: Current balances per user per chain per asset
-- **user_usd_snapshots**: Daily USD value snapshots per user
-- **droplets_cache**: Accumulated droplets per user per day
-- **excluded_addresses**: Integration and system addresses to exclude
-- **events**: Raw blockchain events for audit trail
-
-## Production Deployment
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  postgres:
-    image: postgres:14-alpine
-    environment:
-      POSTGRES_DB: stream_droplets
-      POSTGRES_USER: stream
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    
-  app:
-    build: .
-    depends_on:
-      - postgres
-    environment:
-      - DB_HOST=postgres
-    env_file:
-      - .env
-    ports:
-      - "3000:3000"
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-```
-
-### Kubernetes
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: stream-droplets
-spec:
-  replicas: 1
-  template:
-    spec:
-      containers:
-      - name: app
-        image: stream-droplets:latest
-        ports:
-        - containerPort: 3000
-        livenessProbe:
-          httpGet:
-            path: /api/v1/health/live
-            port: 3000
-        readinessProbe:
-          httpGet:
-            path: /api/v1/health/ready
-            port: 3000
-```
-
-## Monitoring & Maintenance
-
-### Key Metrics to Monitor
-
-- **TVL Tracking**: Should match dashboard ($157M+)
-- **User Count**: Currently ~1,071 active users
-- **Daily Droplets**: Should equal TVL (1:1 ratio)
-- **Chain Sync Status**: All 6 chains should stay synchronized
-- **Excluded Addresses**: 13 integration contracts excluded
-
-### Maintenance Commands
-
-```bash
-# Check system status
-docker-compose exec app npm run status
-
-# Trigger manual snapshot
-docker-compose exec app npm run snapshot
-
-# Recalculate historical droplets
-docker-compose exec app npm run recalculate --from 2024-02-19
-
-# Check database integrity
-docker-compose exec app npm run verify
-```
-
-## Architecture Details
-
-### Balance Types
-
-**Ethereum Mainnet**
-- Users hold vault shares (not tokens)
-- Shares represent underlying asset value
-- Conversion: shares × price = USD value
-
-**Other Chains**
-- Users hold actual OFT tokens
-- Direct token balances tracked
-- Conversion: tokens × price = USD value
-
-### Decimal Precision
-
-Different assets use different decimal places:
-- ETH/streamETH: 18 decimals
-- BTC/streamBTC: 8 decimals
-- USD: 8 decimals (Ethereum), 6 decimals (other chains)
-- EUR/streamEUR: 6 decimals
-
-### Historical Data
-
-- First xETH vault deployment: Block 21872213
-- First stake event: Block 21872273
-- Backfill starts: February 19, 2024
-- Daily snapshots: Continuous from start date
-
-## Troubleshooting
-
-### Common Issues
-
-1. **TVL Mismatch**
-   - Verify all chains are being indexed
-   - Check decimal conversions for each asset
-   - Ensure oracle prices are updating
-
-2. **Missing Users**
-   - Check if address is in excluded_addresses
-   - Verify chain_share_balances has entries
-   - Ensure all chains are synced
-
-3. **Droplet Calculation Issues**
-   - Verify daily snapshots are running
-   - Check USD conversion logic
-   - Ensure 1:1 ratio (1 droplet per $1 per day)
-
-4. **Container Startup Issues**
-   - Check database connection
-   - Verify all environment variables set
-   - Review container logs
-
-## Support
-
-For technical support or questions, contact the Stream Protocol team.
-
-## License
-
-Proprietary - Stream Protocol © 2024-2025

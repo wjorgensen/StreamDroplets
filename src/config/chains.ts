@@ -54,22 +54,22 @@ export const ethereumConfig: ChainConfig = {
   vaults: {
     xETH: {
       address: validateEnvVar('XETH_VAULT_ETH'),
-      deploymentBlock: 21872329,
+      deploymentBlock: parseInt(validateEnvVar('XETH_VAULT_ETH_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
       address: validateEnvVar('XBTC_VAULT_ETH'),
-      deploymentBlock: 21872534,
+      deploymentBlock: parseInt(validateEnvVar('XBTC_VAULT_ETH_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
       address: validateEnvVar('XUSD_VAULT_ETH'),
-      deploymentBlock: 21871574,
+      deploymentBlock: parseInt(validateEnvVar('XUSD_VAULT_ETH_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
       address: validateEnvVar('XEUR_VAULT_ETH'),
-      deploymentBlock: 22999283,
+      deploymentBlock: parseInt(validateEnvVar('XEUR_VAULT_ETH_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },
@@ -92,8 +92,8 @@ const sonicChain = {
     symbol: 'S',
   },
   rpcUrls: {
-    default: { http: ['https://rpc.soniclabs.com'] },
-    public: { http: ['https://rpc.soniclabs.com'] },
+    default: { http: [] }, // Will be populated from config rpcEndpoints
+    public: { http: [] },   // Will be populated from config rpcEndpoints
   },
 } as const;
 
@@ -113,23 +113,23 @@ export const sonicConfig: ChainConfig = {
   }),
   vaults: {
     xETH: {
-      address: process.env.XETH_OFT_SONIC!,
-      deploymentBlock: 100000000, // TODO: Find actual deployment blocks for Sonic
+      address: validateEnvVar('XETH_OFT_SONIC'),
+      deploymentBlock: parseInt(validateEnvVar('XETH_OFT_SONIC_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_OFT_SONIC!,
-      deploymentBlock: 100000000,
+      address: validateEnvVar('XBTC_OFT_SONIC'),
+      deploymentBlock: parseInt(validateEnvVar('XBTC_OFT_SONIC_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_OFT_SONIC!,
-      deploymentBlock: 100000000,
+      address: validateEnvVar('XUSD_OFT_SONIC'),
+      deploymentBlock: parseInt(validateEnvVar('XUSD_OFT_SONIC_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_OFT_SONIC!,
-      deploymentBlock: 100000000,
+      address: validateEnvVar('XEUR_OFT_SONIC'),
+      deploymentBlock: parseInt(validateEnvVar('XEUR_OFT_SONIC_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },
@@ -159,23 +159,23 @@ export const baseConfig: ChainConfig = {
   }),
   vaults: {
     xETH: {
-      address: process.env.XETH_OFT_BASE!,
-      deploymentBlock: 17248800, // ~191 days ago from current
+      address: validateEnvVar('XETH_OFT_BASE'),
+      deploymentBlock: parseInt(validateEnvVar('XETH_OFT_BASE_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_OFT_BASE!,
-      deploymentBlock: 17248800,
+      address: validateEnvVar('XBTC_OFT_BASE'),
+      deploymentBlock: parseInt(validateEnvVar('XBTC_OFT_BASE_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_OFT_BASE!,
-      deploymentBlock: 17248800,
+      address: validateEnvVar('XUSD_OFT_BASE'),
+      deploymentBlock: parseInt(validateEnvVar('XUSD_OFT_BASE_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_OFT_BASE!,
-      deploymentBlock: 17248800,
+      address: validateEnvVar('XEUR_OFT_BASE'),
+      deploymentBlock: parseInt(validateEnvVar('XEUR_OFT_BASE_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },
@@ -205,23 +205,23 @@ export const arbitrumConfig: ChainConfig = {
   }),
   vaults: {
     xETH: {
-      address: process.env.XETH_OFT_ARB!,
-      deploymentBlock: 244160000, // ~191 days ago from current
+      address: validateEnvVar('XETH_OFT_ARB'),
+      deploymentBlock: parseInt(validateEnvVar('XETH_OFT_ARB_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_OFT_ARB!,
-      deploymentBlock: 244160000,
+      address: validateEnvVar('XBTC_OFT_ARB'),
+      deploymentBlock: parseInt(validateEnvVar('XBTC_OFT_ARB_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_OFT_ARB!,
-      deploymentBlock: 244160000,
+      address: validateEnvVar('XUSD_OFT_ARB'),
+      deploymentBlock: parseInt(validateEnvVar('XUSD_OFT_ARB_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_OFT_ARB!,
-      deploymentBlock: 244160000,
+      address: validateEnvVar('XEUR_OFT_ARB'),
+      deploymentBlock: parseInt(validateEnvVar('XEUR_OFT_ARB_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },
@@ -251,23 +251,23 @@ export const avalancheConfig: ChainConfig = {
   }),
   vaults: {
     xETH: {
-      address: process.env.XETH_OFT_AVAX!,
-      deploymentBlock: 47748800, // ~191 days ago from current
+      address: validateEnvVar('XETH_OFT_AVAX'),
+      deploymentBlock: parseInt(validateEnvVar('XETH_OFT_AVAX_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_OFT_AVAX!,
-      deploymentBlock: 47748800,
+      address: validateEnvVar('XBTC_OFT_AVAX'),
+      deploymentBlock: parseInt(validateEnvVar('XBTC_OFT_AVAX_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_OFT_AVAX!,
-      deploymentBlock: 47748800,
+      address: validateEnvVar('XUSD_OFT_AVAX'),
+      deploymentBlock: parseInt(validateEnvVar('XUSD_OFT_AVAX_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_OFT_AVAX!,
-      deploymentBlock: 47748800,
+      address: validateEnvVar('XEUR_OFT_AVAX'),
+      deploymentBlock: parseInt(validateEnvVar('XEUR_OFT_AVAX_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },
@@ -282,7 +282,7 @@ export const avalancheConfig: ChainConfig = {
 
 // Berachain Configuration (Mainnet)
 const berachainChain = {
-  id: 81457,
+  id: 80094,
   name: 'Berachain',
   nativeCurrency: {
     decimals: 18,
@@ -290,14 +290,14 @@ const berachainChain = {
     symbol: 'BERA',
   },
   rpcUrls: {
-    default: { http: ['https://rpc.berachain.com'] },
-    public: { http: ['https://rpc.berachain.com'] },
+    default: { http: [] }, // Will be populated from config rpcEndpoints
+    public: { http: [] },   // Will be populated from config rpcEndpoints
   },
 } as const;
 
 export const berachainConfig: ChainConfig = {
   chain: berachainChain,
-  chainId: 81457,
+  chainId: 80094,
   name: 'Berachain',
   rpcEndpoints: (() => {
     const baseUrl = process.env.ALCHEMY_BERA_RPC;
@@ -318,23 +318,23 @@ export const berachainConfig: ChainConfig = {
   })(),
   vaults: {
     xETH: {
-      address: process.env.XETH_OFT_BERA!,
-      deploymentBlock: 2699520, // ~191 days ago from current
+      address: validateEnvVar('XETH_OFT_BERA'),
+      deploymentBlock: parseInt(validateEnvVar('XETH_OFT_BERA_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xBTC: {
-      address: process.env.XBTC_OFT_BERA!,
-      deploymentBlock: 2699520,
+      address: validateEnvVar('XBTC_OFT_BERA'),
+      deploymentBlock: parseInt(validateEnvVar('XBTC_OFT_BERA_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xUSD: {
-      address: process.env.XUSD_OFT_BERA!,
-      deploymentBlock: 2699520,
+      address: validateEnvVar('XUSD_OFT_BERA'),
+      deploymentBlock: parseInt(validateEnvVar('XUSD_OFT_BERA_DEPLOY_BLOCK')),
       firstRound: 1,
     },
     xEUR: {
-      address: process.env.XEUR_OFT_BERA!,
-      deploymentBlock: 2699520,
+      address: validateEnvVar('XEUR_OFT_BERA'),
+      deploymentBlock: parseInt(validateEnvVar('XEUR_OFT_BERA_DEPLOY_BLOCK')),
       firstRound: 1,
     },
   },

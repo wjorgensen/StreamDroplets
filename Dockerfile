@@ -33,8 +33,11 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/tsconfig.json ./
 
-# Copy database migrations and configuration
-COPY knexfile.prod.js ./knexfile.js
+# Copy source migrations for MainOrchestrator
+COPY --from=builder /app/src/db/migrations ./src/db/migrations
+
+# Copy database migrations and configuration (for compatibility)
+COPY knexfile.js ./knexfile.js
 
 # Copy startup script
 COPY docker-entrypoint.sh /usr/local/bin/
@@ -62,4 +65,4 @@ USER nodejs
 
 # Start application
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/index.js"]

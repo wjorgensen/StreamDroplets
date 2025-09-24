@@ -1,6 +1,5 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { AccrualEngine } from '../../accrual/AccrualEngine';
 import { createLogger } from '../../utils/logger';
 import { getDb } from '../../db/connection';
 
@@ -12,11 +11,11 @@ const querySchema = z.object({
 });
 
 export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
-  const accrualEngine = new AccrualEngine();
+  const db = getDb();
   
   /**
    * GET /leaderboard
-   * Returns top addresses by droplets
+   * Returns top addresses by droplets with pagination
    */
   fastify.get('/', async (request, reply) => {
     try {
@@ -28,65 +27,83 @@ export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       
-      // Use AccrualEngine to get proper leaderboard with exclusions
-      const leaderboardData = await accrualEngine.getLeaderboard(limit);
+      // Get each unique address with their latest snapshot (most recent date they appear)
+      // This includes users who may have withdrawn all money but earned droplets in the past
+      const latestSnapshotsSubquery = db('user_daily_snapshots as uds1')
+        .select('address')
+        .max('snapshot_date as latest_date')
+        .groupBy('address');
       
-      // If no data from AccrualEngine, fall back to filtered current_balances
-      if (leaderboardData.length === 0) {
-        const db = getDb();
-        
-        // Get excluded addresses
-        const excludedAddresses = await db('excluded_addresses').pluck('address');
-        
-        const results = await db('current_balances')
-          .select('address')
-          .sum('shares as total_shares')
-          .whereNotIn('address', excludedAddresses)
-          .groupBy('address')
-          .orderBy('total_shares', 'desc')
-          .limit(limit);
-        
-        const leaderboard = results.map((row, index) => ({
-          rank: index + 1,
-          address: row.address,
-          droplets: row.total_shares,
-          breakdown: {
-            xETH: '0',
-            xBTC: '0',
-            xUSD: '0',
-            xEUR: '0',
-          }
-        }));
-        
-        return reply.send({
-          data: leaderboard,
-          pagination: {
-            limit,
-            offset,
-            total: leaderboard.length,
+      // Get the full snapshot data for each address's latest date
+      const leaderboardData = await db('user_daily_snapshots as uds2')
+        .select([
+          'uds2.address',
+          'uds2.total_droplets',
+          'uds2.snapshot_date as last_active',
+          'uds2.total_usd_value',
+          'uds2.xeth_shares_total',
+          'uds2.xeth_usd_value',
+          'uds2.xbtc_shares_total', 
+          'uds2.xbtc_usd_value',
+          'uds2.xusd_shares_total',
+          'uds2.xusd_usd_value',
+          'uds2.xeur_shares_total',
+          'uds2.xeur_usd_value',
+          'uds2.integration_breakdown'
+        ])
+        .joinRaw('INNER JOIN (?) as latest ON uds2.address = latest.address AND uds2.snapshot_date = latest.latest_date', [latestSnapshotsSubquery])
+        .orderBy('uds2.total_droplets', 'desc')
+        .limit(limit)
+        .offset(offset);
+      
+      // Get total count for pagination
+      const [{ count }] = await db('user_daily_snapshots as uds1')
+        .countDistinct('address as count');
+      
+      // Format the leaderboard data
+      const formattedLeaderboard = leaderboardData.map((entry, index) => {
+        let integrationBreakdown = {};
+        try {
+          integrationBreakdown = JSON.parse(entry.integration_breakdown || '{}');
+        } catch (e) {
+          logger.warn(`Failed to parse integration breakdown for ${entry.address}: ${e}`);
+        }
+
+        return {
+          rank: offset + index + 1,
+          address: entry.address,
+          totalDroplets: entry.total_droplets,
+          lastActive: entry.last_active,
+          totalUsdValue: entry.total_usd_value,
+          balances: {
+            xeth: {
+              shares: entry.xeth_shares_total,
+              usdValue: entry.xeth_usd_value,
+            },
+            xbtc: {
+              shares: entry.xbtc_shares_total,
+              usdValue: entry.xbtc_usd_value,
+            },
+            xusd: {
+              shares: entry.xusd_shares_total,
+              usdValue: entry.xusd_usd_value,
+            },
+            xeur: {
+              shares: entry.xeur_shares_total,
+              usdValue: entry.xeur_usd_value,
+            },
           },
-        });
-      }
-      
-      // Format the AccrualEngine data
-      const formattedLeaderboard = await Promise.all(
-        leaderboardData.map(async (item) => {
-          const dropletData = await accrualEngine.calculateDroplets(item.address);
-          return {
-            rank: item.rank,
-            address: item.address,
-            droplets: item.droplets,
-            breakdown: dropletData.breakdown,
-          };
-        })
-      );
+          integrationBreakdown,
+        };
+      });
       
       return reply.send({
         data: formattedLeaderboard,
         pagination: {
           limit,
           offset,
-          total: formattedLeaderboard.length,
+          total: Number(count),
+          hasMore: offset + limit < Number(count),
         },
       });
     } catch (error) {

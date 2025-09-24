@@ -7,6 +7,8 @@ import { createLogger } from '../utils/logger';
 import { pointsRoutes } from './routes/points';
 import { leaderboardRoutes } from './routes/leaderboard';
 import { healthRoutes } from './routes/health';
+import { addressBalanceRoutes } from './routes/addressBalance';
+import { protocolStatsRoutes } from './routes/protocolStats';
 import { testConnection } from '../db/connection';
 
 const logger = createLogger('API');
@@ -36,6 +38,8 @@ export async function createServer() {
   await fastify.register(pointsRoutes, { prefix: '/api/v1/points' });
   await fastify.register(leaderboardRoutes, { prefix: '/api/v1/leaderboard' });
   await fastify.register(healthRoutes, { prefix: '/api/v1/health' });
+  await fastify.register(addressBalanceRoutes, { prefix: '/api/v1/addressBalance' });
+  await fastify.register(protocolStatsRoutes, { prefix: '/api/v1/protocolStats' });
   
   // Error handler
   fastify.setErrorHandler((error, _request, reply) => {
@@ -67,7 +71,6 @@ export async function startServer() {
     logger.info(`Server listening on ${config.api.host}:${config.api.port}`);
   } catch (error) {
     logger.error('Failed to start server:', error);
-    console.error('Full error:', error);
     process.exit(1);
   }
 }

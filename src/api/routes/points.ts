@@ -10,9 +10,7 @@ const paramsSchema = z.object({
 });
 
 export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
-  // Use the simplified AccrualEngine that reads pre-calculated values
-  const SimplifiedAccrualEngine = require('../../accrual/SimplifiedAccrualEngine').SimplifiedAccrualEngine;
-  const accrualEngine = new SimplifiedAccrualEngine();
+  const db = getDb();
   
   /**
    * GET /points/:address
@@ -24,126 +22,75 @@ export const pointsRoutes: FastifyPluginAsync = async (fastify) => {
       
       logger.info(`Getting droplets for ${address}`);
       
-      // Use AccrualEngine to calculate actual droplets
-      const dropletResult = await accrualEngine.calculateDroplets(address.toLowerCase());
+      // Get droplets from the pre-calculated leaderboard
+      const leaderboardEntry = await db('leaderboard')
+        .where('address', address.toLowerCase())
+        .first();
       
-      // If no droplets and no balances, return 404
-      if (dropletResult.droplets === '0') {
-        const db = getDb();
-        const hasAnyActivity = await db('current_balances')
+      if (!leaderboardEntry) {
+        // Check if address has any historical activity
+        const hasActivity = await db('daily_snapshots')
           .where('address', address.toLowerCase())
           .first();
         
-        if (!hasAnyActivity) {
-          const hasSnapshots = await db('balance_snapshots')
-            .where('address', address.toLowerCase())
-            .first();
-          
-          if (!hasSnapshots) {
-            return reply.status(404).send({
-              error: 'Address not found',
-            });
-          }
+        if (!hasActivity) {
+          return reply.status(404).send({
+            error: 'Address not found',
+          });
         }
+        
+        // Has activity but no droplets
+        return reply.send({
+          address,
+          droplets: '0',
+          lastUpdated: new Date(),
+          breakdown: {
+            total: '0',
+          },
+        });
       }
       
-      return reply.send(dropletResult);
+      // Get the latest snapshot for breakdown details
+      const latestSnapshot = await db('daily_snapshots')
+        .where('address', address.toLowerCase())
+        .orderBy('snapshot_date', 'desc')
+        .first();
+      
+      const breakdown: any = {
+        total: leaderboardEntry.total_droplets,
+      };
+      
+      if (latestSnapshot) {
+        breakdown.xETH = latestSnapshot.xeth_usd_value || '0';
+        breakdown.xBTC = latestSnapshot.xbtc_usd_value || '0';
+        breakdown.xUSD = latestSnapshot.xusd_usd_value || '0';
+        breakdown.xEUR = latestSnapshot.xeur_usd_value || '0';
+        breakdown.integrations = latestSnapshot.integration_usd_value || '0';
+        breakdown.lastSnapshotDate = latestSnapshot.snapshot_date;
+        breakdown.lastDayEarned = latestSnapshot.droplets_earned || '0';
+      }
+      
+      return reply.send({
+        address,
+        droplets: leaderboardEntry.total_droplets,
+        lastUpdated: leaderboardEntry.last_updated || new Date(),
+        breakdown,
+        metadata: {
+          daysParticipated: leaderboardEntry.days_participated || 0,
+          averageUsdPerDay: leaderboardEntry.average_daily_usd || '0',
+          firstSeen: leaderboardEntry.first_seen,
+        }
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return reply.status(400).send({
           error: 'Invalid address format',
-          details: error.errors,
         });
       }
       
-      logger.error('Error calculating droplets:', error);
+      logger.error('Error fetching droplets:', error);
       return reply.status(500).send({
-        error: 'Failed to calculate droplets',
-      });
-    }
-  });
-  
-  /**
-   * GET /points/:address/:asset
-   * Returns droplets for a specific asset
-   */
-  fastify.get('/:address/:asset', async (request, reply) => {
-    try {
-      const address = (request.params as any).address;
-      const asset = (request.params as any).asset;
-      
-      if (!['xETH', 'xBTC', 'xUSD', 'xEUR'].includes(asset)) {
-        return reply.status(400).send({
-          error: 'Invalid asset. Must be xETH, xBTC, xUSD, or xEUR',
-        });
-      }
-      
-      const droplets = await accrualEngine.calculateDropletsForAsset(
-        address.toLowerCase(),
-        asset as any
-      );
-      
-      return reply.send({
-        address,
-        asset,
-        droplets: droplets.toString(),
-        lastUpdated: new Date(),
-      });
-    } catch (error) {
-      logger.error('Error calculating asset droplets:', error);
-      return reply.status(500).send({
-        error: 'Failed to calculate droplets',
-      });
-    }
-  });
-  
-  /**
-   * GET /points/:address/range
-   * Returns droplets for a specific time range
-   */
-  fastify.get('/:address/range', async (request, reply) => {
-    try {
-      const address = (request.params as any).address;
-      const { startTime, endTime, asset } = request.query as any;
-      
-      const start = startTime ? new Date(startTime) : undefined;
-      const end = endTime ? new Date(endTime) : undefined;
-      
-      if (asset) {
-        if (!['xETH', 'xBTC', 'xUSD', 'xEUR'].includes(asset)) {
-          return reply.status(400).send({
-            error: 'Invalid asset. Must be xETH, xBTC, xUSD, or xEUR',
-          });
-        }
-        
-        const droplets = await accrualEngine.calculateDropletsForRange(
-          address.toLowerCase(),
-          asset,
-          start || new Date(),
-          end || new Date()
-        );
-        
-        return reply.send({
-          address,
-          asset,
-          droplets: droplets.toString(),
-          startTime: start,
-          endTime: end,
-          lastUpdated: new Date(),
-        });
-      } else {
-        // Calculate for all assets in range
-        const result = await accrualEngine.calculateDroplets(address.toLowerCase());
-        return reply.send({
-          ...result,
-          startTime: start,
-          endTime: end,
-        });
-      }
-    } catch (error) {
-      logger.error('Error calculating range droplets:', error);
-      return reply.status(500).send({
-        error: 'Failed to calculate droplets',
+        error: 'Failed to fetch droplets',
       });
     }
   });

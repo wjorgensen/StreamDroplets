@@ -4,18 +4,13 @@
   "description": "Points tracking system for Stream Protocol vaults",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "build": "tsc || true",
-    "start": "node dist/main.js",
-    "start:prod": "NODE_ENV=production node dist/main.js",
-    "db:migrate": "knex migrate:latest --knexfile src/db/knexfile.js",
+    "build": "tsc",
+    "start": "node dist/index.js",
     "db:migrate:prod": "knex migrate:latest --knexfile dist/db/knexfile.js --env production",
-    "status": "node dist/scripts/final-production-test.js",
-    "snapshot": "node dist/scripts/trigger-snapshot.js",
-    "recalculate": "node dist/scripts/generate-all-historical-droplets.js",
-    "verify": "node dist/scripts/verify-system-metrics.js",
-    "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "recalculate": "node dist/src/scripts/generate-all-historical-droplets.js",
+    "verify": "node dist/src/scripts/verify-system-metrics.js",
+    "backfill:integrations": "node dist/src/scripts/backfill-integrations.js",
+    "test:transfer-events": "npx tsx test_transfer_events.ts"
   },
   "engines": {
     "node": ">=20.0.0",

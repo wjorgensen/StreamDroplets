@@ -1,59 +1,24 @@
 import knex, { Knex } from 'knex';
-import { config } from '../config';
+import knexConfig from '../knexfile';
 
 let db: Knex | null = null;
 
 export function getDb(): Knex {
   if (!db) {
-    // ALWAYS use DATABASE_URL if it exists, regardless of other variables
-    let connection: any;
-    
-    if (process.env.DATABASE_URL) {
-      console.log('Using DATABASE_URL for connection');
-      // Production PostgreSQL requires SSL
-      if (process.env.NODE_ENV === 'production') {
-        connection = {
-          connectionString: process.env.DATABASE_URL,
-          ssl: {
-            rejectUnauthorized: false
-          }
-        };
-      } else {
-        // Development mode - use DATABASE_URL directly
-        connection = process.env.DATABASE_URL;
-      }
-    } else {
-      console.log('No DATABASE_URL found, using individual config');
-      // Only use individual config if DATABASE_URL doesn't exist
-      connection = {
-        host: config.database.host,
-        port: config.database.port,
-        database: config.database.name,
-        user: config.database.user,
-        password: config.database.password,
-      };
-    }
+    const environment = process.env.NODE_ENV || 'development';
+    const config = knexConfig[environment as keyof typeof knexConfig];
     
     console.log('Database connection config:', {
+      environment,
       hasDATABASE_URL: !!process.env.DATABASE_URL,
-      isProduction: process.env.NODE_ENV === 'production',
-      connectionType: typeof connection,
+      connectionType: typeof config.connection,
       // Log connection string pattern without sensitive data
       connectionPattern: process.env.DATABASE_URL 
         ? process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@').substring(0, 50) + '...'
         : 'Using individual config'
     });
     
-    db = knex({
-      client: 'postgresql',
-      connection,
-      pool: {
-        min: 2,
-        max: 10,
-      },
-      // Connection timeout
-      acquireConnectionTimeout: 60000,
-    });
+    db = knex(config);
   }
   return db;
 }

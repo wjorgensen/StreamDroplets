@@ -33,7 +33,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
       
       // Try to get basic stats if possible (but don't fail if not)
       try {
-        const userCount = await db('current_balances')
+        const userCount = await db('share_balances')
           .countDistinct('address as count')
           .first()
           .timeout(1000); // 1 second timeout
@@ -68,13 +68,13 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(503).send({ ready: false });
       }
       
-      // Check if we have any rounds indexed
-      const roundCount = await db('rounds').count('* as count').first() as {count: number} | undefined;
-      const hasRounds = (roundCount?.count || 0) > 0;
+      // Check if we have any events processed (indicates system is ready)
+      const eventCount = await db('daily_events').count('* as count').first() as {count: number} | undefined;
+      const hasEvents = (eventCount?.count || 0) > 0;
       
       return reply
-        .status(hasRounds ? 200 : 503)
-        .send({ ready: hasRounds });
+        .status(hasEvents ? 200 : 503)
+        .send({ ready: hasEvents });
       
     } catch (error) {
       return reply.status(503).send({ ready: false });
