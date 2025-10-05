@@ -4,7 +4,7 @@
  */
 
 import { decodeEventLog, getAddress } from 'viem';
-import { CONSTANTS } from '../../config/constants';
+import { CONSTANTS, BlockRange } from '../../config/constants';
 import { INTEGRATION_CONTRACTS, CONTRACTS } from '../../config/contracts';
 import { STABILITY_POOL_ABI } from '../../config/abis/stabilityPool';
 import { STABILITY_ATOKEN_ABI } from '../../config/abis/stabilityAToken';
@@ -22,11 +22,11 @@ export interface StabilityEvent {
   protocolType: 'lending';
   eventType: 'supply' | 'withdraw' | 'transfer';
   userAddress: string;
-  amount?: string; // For supply/withdraw this is the underlying amount; for transfer this is aToken amount
-  shares?: string; // For all events, this is the aToken amount (shares)
-  assets?: string; // For supply/withdraw, this is the underlying assets amount
-  fromAddress?: string; // For transfers
-  toAddress?: string; // For transfers
+  amount?: string; 
+  shares?: string; 
+  assets?: string; 
+  fromAddress?: string; 
+  toAddress?: string; 
   blockNumber: number;
   timestamp: Date;
   txHash: string;
@@ -37,7 +37,7 @@ export interface StabilityEvent {
 export class StabilityBalanceTracker {
   private readonly POOL_ADDRESS = INTEGRATION_CONTRACTS.STABILITY.SONIC.POOL;
   private readonly ATOKEN_ADDRESS = INTEGRATION_CONTRACTS.STABILITY.SONIC.XUSD_ATOKEN;
-  private readonly UNDERLYING_ASSET = CONTRACTS.xUSD.sonic; // xUSD token address on Sonic
+  private readonly UNDERLYING_ASSET = CONTRACTS.xUSD.sonic; 
   private readonly db = getDb();
   private alchemyService: AlchemyService;
 
@@ -47,19 +47,26 @@ export class StabilityBalanceTracker {
   }
 
   /**
-   * Fetch and process all Stability events for a specific block range
+   * Converts an event date string to a Date object with UTC midnight timestamp
    */
-  async processStabilityEvents(
+  private getEventTimestamp(eventDate: string): Date {
+    return new Date(`${eventDate}T00:00:00.000Z`);
+  }
+
+  /**
+   * Fetches and stores Stability events for a block range
+   */
+  async fetchEventsForRange(
     fromBlock: number,
     toBlock: number,
     eventDate: string
   ): Promise<void> {
-    logger.info(`Processing Stability events from blocks ${fromBlock} to ${toBlock}`);
+    logger.info(`Fetching Stability events from blocks ${fromBlock} to ${toBlock}`);
     
     try {
       const [poolEvents, aTokenEvents] = await Promise.all([
-        this.fetchPoolEvents(fromBlock, toBlock),
-        this.fetchATokenEvents(fromBlock, toBlock)
+        this.fetchPoolEvents(fromBlock, toBlock, eventDate),
+        this.fetchATokenEvents(fromBlock, toBlock, eventDate)
       ]);
       
       const allEvents = [...poolEvents, ...aTokenEvents];
@@ -70,21 +77,83 @@ export class StabilityBalanceTracker {
       }
       
       await this.storeEvents(allEvents, eventDate);
-      await this.updateUserBalances(allEvents, eventDate);
       
-      logger.info(`Processed ${allEvents.length} Stability events (${poolEvents.length} pool, ${aTokenEvents.length} aToken)`);
+      logger.info(`Stored ${allEvents.length} Stability events (${poolEvents.length} pool, ${aTokenEvents.length} aToken)`);
     } catch (error) {
-      logger.error('Failed to process Stability events:', error);
+      logger.error('Failed to fetch Stability events:', error);
       throw error;
     }
   }
 
   /**
-   * Fetch events from the Stability pool contract (Supply/Withdraw)
+   * Processes stored Stability events to update user balances
+   */
+  async processEventsForRange(range: BlockRange, eventDate: string): Promise<void> {
+    if (range.chainId !== CONSTANTS.CHAIN_IDS.SONIC) {
+      logger.warn(`Stability Protocol not supported on chain ${range.chainId}`);
+      return;
+    }
+
+    logger.info(`Processing stored Stability events for blocks ${range.fromBlock} to ${range.toBlock}`);
+
+    const records = await this.db('daily_integration_events')
+      .where({
+        event_date: eventDate,
+        protocol_name: 'stability',
+        chain_id: range.chainId,
+      })
+      .whereBetween('block_number', [range.fromBlock, range.toBlock])
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    if (records.length === 0) {
+      logger.debug('No stored Stability events found for processing');
+      return;
+    }
+
+    const aggregates = new Map<string, { shareDelta: bigint; lastBlock: number }>();
+
+    for (const record of records) {
+      const shareDelta = this.toBigInt(record.shares_delta);
+      if (shareDelta === 0n) {
+        continue;
+      }
+
+      const address = record.address as string;
+      const existing = aggregates.get(address);
+      if (existing) {
+        aggregates.set(address, {
+          shareDelta: existing.shareDelta + shareDelta,
+          lastBlock: Math.max(existing.lastBlock, record.block_number ?? 0),
+        });
+      } else {
+        aggregates.set(address, {
+          shareDelta,
+          lastBlock: record.block_number ?? 0,
+        });
+      }
+    }
+
+    if (aggregates.size === 0) {
+      logger.debug('No Stability balance changes derived from stored events');
+      return;
+    }
+
+    for (const [address, aggregate] of aggregates.entries()) {
+      await this.updateUserBalance(address, aggregate.shareDelta, aggregate.lastBlock, eventDate);
+    }
+
+    logger.info(`Applied Stability balance updates for ${aggregates.size} address(es)`);
+  }
+
+  /**
+   * Fetches supply and withdraw events from the Stability pool contract
    */
   private async fetchPoolEvents(
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<StabilityEvent[]> {
     const events: StabilityEvent[] = [];
 
@@ -100,12 +169,12 @@ export class StabilityBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodePoolLogToEvent(log);
+          const event = await this.decodePoolLogToEvent(log, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode pool log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -118,11 +187,12 @@ export class StabilityBalanceTracker {
   }
 
   /**
-   * Fetch events from the aToken contract (Transfer)
+   * Fetches transfer events from the aToken contract
    */
   private async fetchATokenEvents(
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<StabilityEvent[]> {
     const events: StabilityEvent[] = [];
 
@@ -138,12 +208,12 @@ export class StabilityBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodeATokenLogToEvent(log);
+          const event = await this.decodeATokenLogToEvent(log, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode aToken log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -156,9 +226,9 @@ export class StabilityBalanceTracker {
   }
 
   /**
-   * Decode a pool log to a StabilityEvent
+   * Decodes a pool log into a StabilityEvent object
    */
-  private async decodePoolLogToEvent(log: any): Promise<StabilityEvent | null> {
+  private async decodePoolLogToEvent(log: any, eventDate: string): Promise<StabilityEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: STABILITY_POOL_ABI,
@@ -166,13 +236,12 @@ export class StabilityBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
+      const timestamp = this.getEventTimestamp(eventDate);
 
       switch ((decodedLog as any).eventName) {
         case 'Supply': {
           const { reserve, onBehalfOf, amount } = decodedLog.args as any;
           
-          // Only track xUSD supply events
           if (getAddress(reserve as string) !== getAddress(this.UNDERLYING_ASSET)) {
             return null;
           }
@@ -198,7 +267,6 @@ export class StabilityBalanceTracker {
         case 'Withdraw': {
           const { reserve, to, amount } = decodedLog.args as any;
           
-          // Only track xUSD withdraw events
           if (getAddress(reserve as string) !== getAddress(this.UNDERLYING_ASSET)) {
             return null;
           }
@@ -222,7 +290,6 @@ export class StabilityBalanceTracker {
         }
 
         default:
-          // Ignore other events
           return null;
       }
     } catch (error) {
@@ -232,9 +299,9 @@ export class StabilityBalanceTracker {
   }
 
   /**
-   * Decode an aToken log to a StabilityEvent
+   * Decodes an aToken log into a StabilityEvent object
    */
-  private async decodeATokenLogToEvent(log: any): Promise<StabilityEvent | null> {
+  private async decodeATokenLogToEvent(log: any, eventDate: string): Promise<StabilityEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: STABILITY_ATOKEN_ABI,
@@ -242,19 +309,17 @@ export class StabilityBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
+      const timestamp = this.getEventTimestamp(eventDate);
 
       switch ((decodedLog as any).eventName) {
         case 'Transfer': {
           const { from, to, value } = decodedLog.args as any;
           
-          // Skip mint/burn operations (to/from zero address)
           const { checkZeroAddress } = require('../../config/contracts');
           if (checkZeroAddress(from) || checkZeroAddress(to)) {
             return null;
           }
 
-          // For now, we'll track the transfer to the recipient
           return {
             chainId: CONSTANTS.CHAIN_IDS.SONIC,
             contractAddress: getAddress(this.ATOKEN_ADDRESS),
@@ -275,7 +340,6 @@ export class StabilityBalanceTracker {
         }
 
         default:
-          // Ignore other aToken events for now
           return null;
       }
     } catch (error) {
@@ -284,9 +348,11 @@ export class StabilityBalanceTracker {
     }
   }
 
+  /**
+   * Retrieves the current liquidity index from the Stability pool at a specific block
+   */
   async getCurrentLiquidityIndex(blockNumber: number): Promise<bigint> {
     try {
-      // Validate block number
       if (typeof blockNumber !== 'number' || !Number.isInteger(blockNumber) || blockNumber < 0) {
         throw new Error(`Invalid block number: ${blockNumber}. Must be a non-negative integer.`);
       }
@@ -313,7 +379,6 @@ export class StabilityBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('returned no data ("0x")') || 
           errorMessage.includes('contract does not have the function') ||
           errorMessage.includes('address is not a contract')) {
@@ -326,6 +391,9 @@ export class StabilityBalanceTracker {
     }
   }
 
+  /**
+   * Updates all Stability balances using the current liquidity index
+   */
   async updateBalancesWithLiquidityIndex(blockNumber: number): Promise<void> {
     logger.info(`Updating Stability balances with liquidity index at block ${blockNumber}`);
     
@@ -344,11 +412,10 @@ export class StabilityBalanceTracker {
 
       for (const position of positions) {
         const shares = BigInt(position.position_shares);
-        // AAVE uses 1e27 scaling for liquidity index
         const newUnderlyingAssets = (shares * liquidityIndex) / (10n ** 27n);
         
         const currentUnderlying = BigInt(position.underlying_assets || '0');
-        const changeThreshold = currentUnderlying / 1000n; // 0.1% threshold
+        const changeThreshold = currentUnderlying / 1000n;
 
         if (newUnderlyingAssets > currentUnderlying + changeThreshold || 
             newUnderlyingAssets < currentUnderlying - changeThreshold) {
@@ -368,7 +435,6 @@ export class StabilityBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('Contract not deployed:')) {
         logger.warn(`Stability pool not deployed at block ${blockNumber}, skipping balance updates`);
         return;
@@ -380,7 +446,7 @@ export class StabilityBalanceTracker {
   }
 
   /**
-   * Store events in the daily_integration_events table
+   * Stores Stability events in the daily_integration_events table
    */
   private async storeEvents(events: StabilityEvent[], eventDate: string): Promise<void> {
     if (events.length === 0) return;
@@ -407,45 +473,32 @@ export class StabilityBalanceTracker {
       counterparty_address: event.fromAddress?.toLowerCase() || null,
     }));
 
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        return true;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipping Stability events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Stability events with zero amount_delta`);
+    }
+
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(nonZeroEventRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Stability events`);
+    logger.debug(`Stored ${nonZeroEventRecords.length} Stability events`);
   }
 
   /**
-   * Update user balances based on events
-   */
-  private async updateUserBalances(events: StabilityEvent[], eventDate: string): Promise<void> {
-    const userEvents = new Map<string, StabilityEvent[]>();
-    for (const event of events) {
-      const userKey = event.userAddress.toLowerCase();
-      if (!userEvents.has(userKey)) {
-        userEvents.set(userKey, []);
-      }
-      userEvents.get(userKey)!.push(event);
-    }
-
-    for (const [userAddress, userEventList] of userEvents) {
-      let netShareChange = 0n;
-      
-      for (const event of userEventList) {
-        const delta = event.eventType === 'supply' ? BigInt(event.shares || '0') :
-                      event.eventType === 'withdraw' ? -BigInt(event.shares || '0') :
-                      event.eventType === 'transfer' ? BigInt(event.shares || '0') : 0n;
-        netShareChange += delta;
-      }
-
-      if (netShareChange !== 0n) {
-        await this.updateUserBalance(userAddress, netShareChange, userEventList[0].blockNumber, eventDate);
-      }
-    }
-  }
-
-  /**
-   * Update a single user's balance
+   * Updates a user's balance in the database based on share changes
    */
   private async updateUserBalance(userAddress: string, shareChange: bigint, blockNumber: number, eventDate: string): Promise<void> {
     const currentBalance = await this.db('integration_balances')
@@ -464,7 +517,6 @@ export class StabilityBalanceTracker {
       logger.warn(`Negative balance detected for ${userAddress}: ${newShares}`);
     }
 
-    // Initial 1:1 mapping - will be updated by liquidity index
     const underlyingAssets = newShares;
 
     if (currentBalance) {
@@ -493,4 +545,30 @@ export class StabilityBalanceTracker {
         });
     }
   }
+
+  /**
+   * Converts a value to a BigInt with safe error handling
+   */
+  private toBigInt(value: any): bigint {
+    if (value === null || value === undefined) {
+      return 0n;
+    }
+
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    const str = String(value);
+    if (str.trim().length === 0) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(str);
+    } catch (error) {
+      logger.warn(`Failed to convert value to BigInt: ${value}`, error);
+      return 0n;
+    }
+  }
+
 }

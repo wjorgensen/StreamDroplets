@@ -14,9 +14,11 @@ import { createLogger } from '../utils/logger';
 import { DailySnapshotService } from './DailySnapshotService';
 import { AlchemyService } from '../utils/AlchemyService';
 import { blocksBeforeTimestamp } from '../utils/blockTime';
-import { DEPLOYMENT_INFO, getSupportedChainIds, getSupportedNetworkNames, getChainIdToNetworkNameMapping } from '../config/contracts';
+import { DEPLOYMENT_INFO, getSupportedChainIds, getChainIdToNetworkNameMapping, CONTRACTS } from '../config/contracts';
 import { BlockRange, CONSTANTS } from '../config/constants';
 import { dateStringToEndOfDayISO } from '../utils/dateUtils';
+import { STREAM_VAULT_ABI } from '../config/abis/streamVault';
+import { withAlchemyRetry } from '../utils/retryUtils';
 
 const logger = createLogger('MainOrchestrator');
 
@@ -41,12 +43,11 @@ export class MainOrchestrator {
   private backfillComplete = false;
 
   constructor() {
-    // AlchemyService will be initialized in start() method
     this.dailySnapshotService = new DailySnapshotService();
   }
 
   /**
-   * Main entry point - starts the orchestration service
+   * Starts the orchestration service
    */
   async start(): Promise<void> {
     if (this.isRunning) {
@@ -58,12 +59,10 @@ export class MainOrchestrator {
     logger.info('Starting StreamDroplets MainOrchestrator');
 
     try {
-      // Step 1: Initialize AlchemyService to setup all chain connections
       logger.info('Initializing AlchemyService...');
       this.alchemyService = AlchemyService.getInstance();
       logger.info('AlchemyService initialized successfully');
       
-      // Step 2: Check for and recover from partial processing
       const partiallyProcessedDay = await this.detectPartiallyProcessedDay();
       if (partiallyProcessedDay) {
         logger.warn(`Detected partially processed day: ${partiallyProcessedDay}`);
@@ -72,10 +71,8 @@ export class MainOrchestrator {
         logger.info(`Recovery completed for ${partiallyProcessedDay}. Backfill will resume from this date.`);
       }
       
-      // Step 3: Run historical backfill
       await this.runBackfill();
       
-      // Step 4: Start real-time processing
       await this.startRealtimeProcessing();
       
     } catch (error) {
@@ -86,7 +83,7 @@ export class MainOrchestrator {
   }
 
   /**
-   * Stop the orchestration service
+   * Stops the orchestration service
    */
   stop(): void {
     this.isRunning = false;
@@ -94,26 +91,23 @@ export class MainOrchestrator {
   }
 
   /**
-   * Run historical backfill from cursor dates to latest block
+   * Runs historical backfill from cursor dates to latest block
    */
   private async runBackfill(): Promise<void> {
     logger.info('Starting historical backfill process...');
     
-    // Get the earliest last_processed_date from cursors to determine where to start
     const earliestCursorDate = await this.getEarliestCursorDate();
     logger.info(`Earliest cursor date found: ${earliestCursorDate}`);
     
-    // Start from the day after the last processed date
     const lastProcessedDate = new Date(earliestCursorDate + 'T00:00:00.000Z');
     const startDate = new Date(lastProcessedDate);
-    startDate.setDate(startDate.getDate() + 1); // Start from next day
+    startDate.setDate(startDate.getDate() + 1);
     
     const currentDate = new Date();
-    currentDate.setUTCHours(0, 0, 0, 0); // Set to midnight UTC
+    currentDate.setUTCHours(0, 0, 0, 0);
     
     logger.info(`Backfill will process from ${startDate.toISOString().split('T')[0]} to ${currentDate.toISOString().split('T')[0]}`);
     
-    // Processing in UTC - no timezone conversions needed
     const processingDate = new Date(startDate);
     const currentDateUTC = new Date(currentDate);
     let dayCount = 0;
@@ -122,7 +116,6 @@ export class MainOrchestrator {
       const dateString = processingDate.toISOString().split('T')[0];
       
       try {
-        // Get block ranges for this day
         const { blockRanges, endBlocks } = await this.calculateBlockRanges(processingDate);
         
         if (blockRanges.length === 0) {
@@ -130,24 +123,19 @@ export class MainOrchestrator {
           continue;
         }
         
-        // Process the day using DailySnapshotService
         await this.dailySnapshotService.processDailySnapshot(dateString, blockRanges);
         
-        // Update progress cursors
         await this.updateProgressCursors(blockRanges, dateString);
         
-        // Store block timestamps for this date
         await this.storeBlockTimestamps(dateString, endBlocks);
         
         dayCount++;
         
       } catch (error) {
         logger.error(`CRITICAL: Failed to process ${dateString} - stopping backfill:`, error);
-        // Stop backfill execution - all days must be processed sequentially
         throw error;
       }
       
-      // Move to next day
       processingDate.setDate(processingDate.getDate() + 1);
     }
     
@@ -157,7 +145,7 @@ export class MainOrchestrator {
 
 
   /**
-   * Calculate block ranges for a specific date
+   * Calculates block ranges for a specific date
    */
   private async calculateBlockRanges(processingDate: Date): Promise<{blockRanges: BlockRange[], endBlocks: Record<number, {block: number, timestamp: Date}>}> {
     const dateString = processingDate.toISOString().split('T')[0];
@@ -166,34 +154,48 @@ export class MainOrchestrator {
     logger.info(`=== BLOCK RANGE CALCULATION FOR ${dateString} ===`);
     logger.info(`Processing date: ${processingDate.toISOString()}`);
     
-    // Get the latest blocks for all chains at 11:59:59 PM UTC for this date
     const endOfDayISO = dateStringToEndOfDayISO(dateString);
-    const networkNames = getSupportedNetworkNames();
+    const chainIdToNetwork = getChainIdToNetworkNameMapping();
+    const cursors = await this.getProgressCursors();
     
     logger.info(`Date string: ${dateString}`);
     logger.info(`End of day ISO: ${endOfDayISO}`);
     logger.info(`End of day timestamp: ${new Date(endOfDayISO).getTime() / 1000}`);
-    logger.info(`Network names: ${networkNames.join(', ')}`);
     
-    // Create starting blocks mapping from progress cursors for binary search
+    const activeNetworkNames: string[] = [];
     const startingBlocks: Record<string, number> = {};
-    const chainIdToNetwork = getChainIdToNetworkNameMapping();
-    const cursors = await this.getProgressCursors();
     
     for (const cursor of cursors) {
       const networkName = chainIdToNetwork[cursor.chain_id];
-      if (networkName) {
-        // Use last processed block as starting point for binary search
+      if (!networkName) continue;
+      
+      const deploymentInfo = Object.values(DEPLOYMENT_INFO.CHAIN_DEPLOYMENTS).find(info => info.chainId === cursor.chain_id);
+      if (!deploymentInfo) {
+        logger.warn(`No deployment info found for chain ${cursor.chain_id}, skipping`);
+        continue;
+      }
+      
+      if (dateString >= deploymentInfo.earliestDate) {
+        activeNetworkNames.push(networkName);
         startingBlocks[networkName] = cursor.last_processed_block;
-        logger.info(`Starting block for ${networkName}: ${cursor.last_processed_block}`);
+        logger.info(`Network ${networkName} (chain ${cursor.chain_id}) is active - deployment: ${deploymentInfo.earliestDate}`);
+      } else {
+        logger.info(`Skipping network ${networkName} (chain ${cursor.chain_id}) - processing date ${dateString} is before deployment date ${deploymentInfo.earliestDate}`);
       }
     }
     
+    logger.info(`Active networks for ${dateString}: ${activeNetworkNames.join(', ')}`);
+    logger.info(`Starting blocks: ${JSON.stringify(startingBlocks)}`);
+    
+    if (activeNetworkNames.length === 0) {
+      logger.info(`No active networks for ${dateString}, skipping block fetch`);
+      return { blockRanges: [], endBlocks: {} };
+    }
+    
     logger.info(`Calling blocksBeforeTimestamp with timestamp: ${endOfDayISO}`);
-    const endBlocks = await blocksBeforeTimestamp(endOfDayISO, networkNames, { startingBlocks });
+    const endBlocks = await blocksBeforeTimestamp(endOfDayISO, activeNetworkNames, { startingBlocks });
     logger.info(`End blocks retrieved: ${JSON.stringify(endBlocks)}`);
     
-    // CRITICAL: If any end block equals a starting block, this indicates a bug
     for (const [networkName, endBlock] of Object.entries(endBlocks)) {
       const startBlock = startingBlocks[networkName];
       if (startBlock && endBlock === startBlock) {
@@ -205,18 +207,15 @@ export class MainOrchestrator {
     
     logger.info(`Chain ID to network mapping: ${JSON.stringify(chainIdToNetwork)}`);
     
-    // Get all supported chain IDs
     const supportedChainIds = getSupportedChainIds();
     logger.info(`Supported chain IDs: ${supportedChainIds.join(', ')}`);
     
-    // Create cursor map from already fetched cursors
     const cursorMap = new Map(cursors.map(c => [c.chain_id, c]));
     logger.info(`Progress cursors found for chains: ${cursors.map(c => `${c.chain_id}(${c.chain_name})`).join(', ')}`);
 
     const endBlocksForStorage: Record<number, {block: number, timestamp: Date}> = {};
     const endOfDay = new Date(endOfDayISO);
     
-    // Loop through all supported chain IDs
     for (const chainId of supportedChainIds) {
       logger.info(`\n--- Processing chain ${chainId} ---`);
       
@@ -235,8 +234,7 @@ export class MainOrchestrator {
       logger.info(`✓ Network name found: ${networkName}`);
       
       if (!endBlocks[networkName]) {
-        logger.warn(`❌ No end block found for chain ${chainId} (${cursor.chain_name}) - network: ${networkName}`);
-        logger.warn(`Available networks in endBlocks: ${Object.keys(endBlocks).join(', ')}`);
+        logger.info(`ℹ️ No end block found for chain ${chainId} (${cursor.chain_name}) - network: ${networkName} (chain not active on ${dateString})`);
         continue;
       }
       
@@ -244,7 +242,6 @@ export class MainOrchestrator {
       logger.info(`✓ End block found: ${endBlock} for network ${networkName}`);
       endBlocksForStorage[chainId] = { block: endBlock, timestamp: endOfDay };
       
-      // Get deployment info for this chain
       const deploymentInfo = Object.values(DEPLOYMENT_INFO.CHAIN_DEPLOYMENTS).find(info => info.chainId === chainId);
       if (!deploymentInfo) {
         logger.warn(`❌ No deployment info found for chain ${chainId}`);
@@ -252,31 +249,20 @@ export class MainOrchestrator {
       }
       logger.info(`✓ Deployment info: earliest date=${deploymentInfo.earliestDate}, earliest block=${deploymentInfo.earliestBlock}`);
       
-      // Check if we're before the deployment date for this chain
-      if (dateString < deploymentInfo.earliestDate) {
-        logger.info(`❌ Skipping chain ${chainId}: processing date ${dateString} is before deployment date ${deploymentInfo.earliestDate}`);
-        continue;
-      }
-      logger.info(`✓ Processing date ${dateString} >= deployment date ${deploymentInfo.earliestDate}`);
-      
       let lastProcessedBlock = cursor.last_processed_block;
       logger.info(`Initial last processed block: ${lastProcessedBlock} (type: ${typeof lastProcessedBlock})`);
       
-      // Ensure lastProcessedBlock is a number
       lastProcessedBlock = Number(lastProcessedBlock);
       logger.info(`Converted to number: ${lastProcessedBlock}`);
       
-      // If last processed block is below the chain's earliest block, set it to earliestBlock - 1
       if (lastProcessedBlock < deploymentInfo.earliestBlock) {
         lastProcessedBlock = deploymentInfo.earliestBlock - 1;
         logger.info(`Adjusted last processed block to ${lastProcessedBlock} (deployment earliest - 1)`);
       }
       
-      // Calculate fromBlock as lastProcessedBlock + 1
       const fromBlock = lastProcessedBlock + 1;
       logger.info(`Calculated fromBlock: ${fromBlock} (should be ${lastProcessedBlock} + 1)`);
       
-      // CRITICAL: fromBlock should never be > endBlock if we're processing the next day
       if (fromBlock > endBlock) {
         const error = `CRITICAL BUG: fromBlock ${fromBlock} > endBlock ${endBlock} for chain ${chainId}. This indicates a date calculation or block retrieval error.`;
         logger.error(error);
@@ -288,6 +274,7 @@ export class MainOrchestrator {
         chainId,
         fromBlock,
         toBlock: endBlock,
+        dateString,
       };
       
       logger.info(`✅ Created block range for chain ${chainId}: ${fromBlock} to ${endBlock}`);
@@ -304,7 +291,7 @@ export class MainOrchestrator {
   }
 
   /**
-   * Get progress cursors for all chains
+   * Gets progress cursors for all chains
    */
   private async getProgressCursors(): Promise<ProgressCursor[]> {
     return await this.db('progress_cursors')
@@ -313,14 +300,13 @@ export class MainOrchestrator {
   }
 
   /**
-   * Format a date value to YYYY-MM-DD string for consistent processing
+   * Formats a date value to YYYY-MM-DD string
    */
   private formatDateForProcessing(dateValue: any): string {
     if (dateValue instanceof Date) {
       return dateValue.toISOString().split('T')[0];
     }
     if (typeof dateValue === 'string') {
-      // If it's already a string, ensure it's in YYYY-MM-DD format
       const parsed = new Date(dateValue);
       return parsed.toISOString().split('T')[0];
     }
@@ -328,7 +314,7 @@ export class MainOrchestrator {
   }
 
   /**
-   * Get the earliest last_processed_date from all cursors to determine backfill start point
+   * Gets the earliest last_processed_date from all cursors
    */
   private async getEarliestCursorDate(): Promise<string> {
     const result = await this.db('progress_cursors')
@@ -338,17 +324,15 @@ export class MainOrchestrator {
       .first();
     
     if (!result) {
-      // Fallback to hardcoded date if no cursor dates exist (shouldn't happen with updated migration)
       logger.warn('No cursor dates found, falling back to hardcoded start date');
       return DEPLOYMENT_INFO.OVERALL_START_DATE;
     }
     
-    // Ensure we return a string in YYYY-MM-DD format
     return this.formatDateForProcessing(result.last_processed_date);
   }
 
   /**
-   * Update progress cursors after successful processing
+   * Updates progress cursors after successful processing
    */
   private async updateProgressCursors(blockRanges: BlockRange[], dateString: string): Promise<void> {
     for (const range of blockRanges) {
@@ -364,7 +348,7 @@ export class MainOrchestrator {
   }
 
   /**
-   * Store block timestamps for the processed date
+   * Stores block timestamps for the processed date
    */
   private async storeBlockTimestamps(dateString: string, endBlocks: Record<number, {block: number, timestamp: Date}>): Promise<void> {
     const blockTimestamps = Object.entries(endBlocks).map(([chainId, {block, timestamp}]) => ({
@@ -384,7 +368,7 @@ export class MainOrchestrator {
   }
 
   /**
-   * Get the latest block numbers for all chains
+   * Gets the latest block numbers for all chains
    */
   private async getLatestBlocks(): Promise<ChainLatestBlock[]> {
     const supportedChains = getSupportedChainIds();
@@ -409,12 +393,11 @@ export class MainOrchestrator {
 
 
   /**
-   * Detect if there's a partially processed day (events exist but no snapshot)
+   * Detects if there's a partially processed day
    */
   private async detectPartiallyProcessedDay(): Promise<string | null> {
     logger.info('Checking for partially processed days...');
     
-    // Look for daily_events without corresponding daily_snapshots
     const partialEventDay = await this.db('daily_events')
       .select('event_date')
       .whereNotExists(function() {
@@ -431,7 +414,6 @@ export class MainOrchestrator {
       return dateString;
     }
     
-    // Look for daily_integration_events without corresponding daily_snapshots
     const partialIntegrationDay = await this.db('daily_integration_events')
       .select('event_date')
       .whereNotExists(function() {
@@ -453,48 +435,44 @@ export class MainOrchestrator {
   }
 
   /**
-   * Clean up partially processed data for a specific date
+   * Cleans up partially processed data for a specific date
    */
   private async cleanupPartiallyProcessedDay(dateString: string): Promise<void> {
     logger.info(`Starting cleanup of partially processed day: ${dateString}`);
     
-    // Step 1: Reset balances that were updated on this date back to previous day's values
-    await this.resetBalancesToPreviousDay(dateString);
-    
-    // Step 2: Delete daily events for this date
-    const deletedEvents = await this.db('daily_events')
-      .where('event_date', dateString)
-      .del();
-    logger.info(`Deleted ${deletedEvents} daily_events records for ${dateString}`);
-    
-    // Step 3: Delete daily integration events for this date
-    const deletedIntegrationEvents = await this.db('daily_integration_events')
-      .where('event_date', dateString)
-      .del();
-    logger.info(`Deleted ${deletedIntegrationEvents} daily_integration_events records for ${dateString}`);
-    
-    // Step 4: Delete any user daily snapshots for this date (in case they were partially created)
-    const deletedUserSnapshots = await this.db('user_daily_snapshots')
-      .where('snapshot_date', dateString)
-      .del();
-    logger.info(`Deleted ${deletedUserSnapshots} user_daily_snapshots records for ${dateString}`);
-    
-    // Step 5: Delete any protocol snapshot for this date (in case it was partially created)
-    const deletedProtocolSnapshot = await this.db('daily_snapshots')
-      .where('snapshot_date', dateString)
-      .del();
-    logger.info(`Deleted ${deletedProtocolSnapshot} daily_snapshots record for ${dateString}`);
+    await this.db.transaction(async (trx) => {
+      await this.resetBalancesToPreviousDay(dateString, trx);
+      
+      const deletedEvents = await trx('daily_events')
+        .where('event_date', dateString)
+        .del();
+      logger.info(`Deleted ${deletedEvents} daily_events records for ${dateString}`);
+      
+      const deletedIntegrationEvents = await trx('daily_integration_events')
+        .where('event_date', dateString)
+        .del();
+      logger.info(`Deleted ${deletedIntegrationEvents} daily_integration_events records for ${dateString}`);
+      
+      const deletedUserSnapshots = await trx('user_daily_snapshots')
+        .where('snapshot_date', dateString)
+        .del();
+      logger.info(`Deleted ${deletedUserSnapshots} user_daily_snapshots records for ${dateString}`);
+      
+      const deletedProtocolSnapshot = await trx('daily_snapshots')
+        .where('snapshot_date', dateString)
+        .del();
+      logger.info(`Deleted ${deletedProtocolSnapshot} daily_snapshots record for ${dateString}`);
+    });
     
     logger.info(`Cleanup completed for ${dateString}`);
   }
 
   /**
-   * Reset share_balances and integration_balances back to their previous day's state
+   * Resets share_balances and integration_balances back to their previous day's state
    */
-  private async resetBalancesToPreviousDay(dateString: string): Promise<void> {
+  private async resetBalancesToPreviousDay(dateString: string, trx?: any): Promise<void> {
     logger.info(`Resetting balances to previous day state for date: ${dateString}`);
     
-    // Get previous day
     const currentDate = new Date(dateString);
     const previousDate = new Date(currentDate);
     previousDate.setDate(previousDate.getDate() - 1);
@@ -502,53 +480,83 @@ export class MainOrchestrator {
     
     logger.info(`Previous day: ${previousDateString}`);
     
-    // Reset share_balances that were last updated on the partial day
-    const shareBalancesToReset = await this.db('share_balances')
-      .where('last_updated_date', dateString);
+    const db = trx || this.db;
     
-    logger.info(`Found ${shareBalancesToReset.length} share_balances to reset`);
+    const eventsExist = await db('daily_events')
+      .where('event_date', dateString)
+      .first();
     
-    for (const balance of shareBalancesToReset) {
-      // Get the user's snapshot from the previous day to restore balance
-      const previousSnapshot = await this.db('user_daily_snapshots')
-        .where('address', balance.address)
-        .where('snapshot_date', previousDateString)
-        .first();
-      
-      if (previousSnapshot) {
-        const assetKey = `${balance.asset.toLowerCase()}_shares_total`;
-        const previousShares = previousSnapshot[assetKey] || '0';
-        
-        // Update the balance back to previous day's value
-        await this.db('share_balances')
-          .where('id', balance.id)
-          .update({
-            shares: previousShares,
+    const shareBalancesToReset: any[] = await db('share_balances')
+      .where('last_updated_date', dateString)
+      .select('*');
+
+    logger.info(`Found ${shareBalancesToReset.length} share_balances marked with ${dateString}`);
+
+    if (eventsExist && shareBalancesToReset.length === 0) {
+      logger.warn(`Found events for ${dateString} but no share_balances were updated. Assuming processing halted before BalanceTracker stage.`);
+    }
+
+    let shareDeltas = new Map<string, bigint>();
+    if (shareBalancesToReset.length > 0) {
+      shareDeltas = await this.computeShareDeltasForDate(dateString, db);
+    }
+
+    if (shareBalancesToReset.length > 0) {
+      const balanceIds = shareBalancesToReset.map((balance: any) => balance.id);
+      const addresses = [...new Set(shareBalancesToReset.map((balance: any) => balance.address.toLowerCase()))];
+
+      logger.info(`Deleting ${balanceIds.length} share_balances to restore previous snapshot state`);
+      await db('share_balances')
+        .whereIn('id', balanceIds)
+        .del();
+
+      let snapshotMap = new Map<string, any>();
+
+      if (addresses.length > 0) {
+        const previousSnapshots = await db('user_daily_snapshots')
+          .where('snapshot_date', previousDateString)
+          .whereIn('address', addresses);
+
+        snapshotMap = new Map(previousSnapshots.map((snapshot: any) => [snapshot.address.toLowerCase(), snapshot]));
+      }
+
+      for (const balance of shareBalancesToReset) {
+        const snapshot = snapshotMap.get(balance.address.toLowerCase());
+
+        if (snapshot) {
+          const assetKey = `${balance.asset.toLowerCase()}_shares_total`;
+          const previousShares = BigInt(snapshot[assetKey] || '0');
+
+          await db('share_balances').insert({
+            address: balance.address.toLowerCase(),
+            asset: balance.asset,
+            shares: previousShares.toString(),
+            underlying_assets: balance.underlying_assets || null,
+            last_update_block: balance.last_update_block,
+            last_updated: new Date(snapshot.snapshot_timestamp),
             last_updated_date: previousDateString,
-            last_updated: new Date(previousSnapshot.snapshot_timestamp),
-            // Keep the same last_update_block - we'll get a proper one when reprocessing
           });
-        
-        logger.info(`Reset share_balance for ${balance.address} ${balance.asset}: ${balance.shares} -> ${previousShares}`);
-      } else {
-        // No previous snapshot exists - this user must be new, delete the balance
-        await this.db('share_balances')
-          .where('id', balance.id)
-          .del();
-        
-        logger.info(`Deleted share_balance for new user ${balance.address} ${balance.asset}`);
+
+          logger.info(`Rebuilt share_balance for ${balance.address} ${balance.asset} -> ${previousShares.toString()} from snapshot ${previousDateString}`);
+        } else {
+          logger.info(`No snapshot found for ${balance.address} ${balance.asset}; skipping balance reconstruction`);
+        }
       }
     }
+
+    if (shareBalancesToReset.length > 0) {
+      await this.validateShareBalanceReconstruction(previousDateString, dateString, shareDeltas, db);
+    } else {
+      logger.info(`Skipping share balance reconstruction validation for ${dateString} (no share balances were updated).`);
+    }
     
-    // Reset integration_balances that were last updated on the partial day
-    const integrationBalancesToReset = await this.db('integration_balances')
+    const integrationBalancesToReset = await db('integration_balances')
       .where('last_updated_date', dateString);
     
     logger.info(`Found ${integrationBalancesToReset.length} integration_balances to reset`);
     
     for (const balance of integrationBalancesToReset) {
-      // Get the user's snapshot from the previous day to restore integration breakdown
-      const previousSnapshot = await this.db('user_daily_snapshots')
+      const previousSnapshot = await db('user_daily_snapshots')
         .where('address', balance.address)
         .where('snapshot_date', previousDateString)
         .first();
@@ -565,20 +573,17 @@ export class MainOrchestrator {
           previousIntegrationBalance = '0';
         }
         
-        // Update the balance back to previous day's value
-        await this.db('integration_balances')
+        await db('integration_balances')
           .where('id', balance.id)
           .update({
             position_shares: previousIntegrationBalance,
             last_updated_date: previousDateString,
             last_updated: new Date(previousSnapshot.snapshot_timestamp),
-            // Keep the same last_update_block - we'll get a proper one when reprocessing
           });
         
         logger.info(`Reset integration_balance for ${balance.address} ${balance.protocol_name}: ${balance.position_shares} -> ${previousIntegrationBalance}`);
       } else {
-        // No previous snapshot exists - this user must be new, delete the balance
-        await this.db('integration_balances')
+        await db('integration_balances')
           .where('id', balance.id)
           .del();
         
@@ -589,16 +594,225 @@ export class MainOrchestrator {
     logger.info(`Balance reset completed for ${dateString}`);
   }
 
+  private async computeShareDeltasForDate(dateString: string, db: any): Promise<Map<string, bigint>> {
+    logger.info(`Computing share balance deltas for ${dateString}`);
+
+    const events = await db('daily_events')
+      .where('event_date', dateString)
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    const deltas = new Map<string, bigint>();
+
+    const applyDelta = (address: string | null, asset: string, delta: bigint) => {
+      if (!address || !asset || delta === 0n) {
+        return;
+      }
+
+      const normalizedAddress = address.toLowerCase();
+      const key = `${normalizedAddress}:${asset}`;
+      const existing = deltas.get(key) || 0n;
+      deltas.set(key, existing + delta);
+    };
+
+    for (const event of events) {
+      const {
+        event_type: eventType,
+        from_address: rawFrom,
+        to_address: rawTo,
+        amount_delta: amountDeltaRaw,
+        asset,
+        isIntegrationAddress,
+        round,
+      } = event;
+
+      const fromAddress = rawFrom ? rawFrom.toLowerCase() : null;
+      const toAddress = rawTo ? rawTo.toLowerCase() : null;
+      const amountDeltaString = amountDeltaRaw?.toString();
+
+      if (!asset || !amountDeltaString) {
+        continue;
+      }
+
+      if (isIntegrationAddress) {
+        const delta = BigInt(amountDeltaString);
+
+        switch (isIntegrationAddress) {
+          case 'from':
+          case 'silo_pending_from':
+            if (toAddress) {
+              applyDelta(toAddress, asset, delta);
+            }
+            break;
+          case 'to':
+          case 'silo_pending_to':
+            if (fromAddress) {
+              applyDelta(fromAddress, asset, -delta);
+            }
+            break;
+          case 'shadow_to':
+          case 'shadow_pending_to':
+            if (fromAddress) {
+              applyDelta(fromAddress, asset, -delta);
+            }
+            break;
+          case 'shadow_from':
+          case 'shadow_pending_from':
+            if (toAddress) {
+              applyDelta(toAddress, asset, delta);
+            }
+            break;
+          case 'siloRouter':
+            break;
+        }
+
+        continue;
+      }
+
+      switch (eventType) {
+        case 'redeem': {
+          if (fromAddress) {
+            applyDelta(fromAddress, asset, BigInt(amountDeltaString));
+          }
+          break;
+        }
+        case 'unstake': {
+          if (fromAddress) {
+            const sharesDelta = await this.calculateUnstakeShareDelta(asset, amountDeltaString, round);
+            applyDelta(fromAddress, asset, sharesDelta);
+          }
+          break;
+        }
+        case 'transfer': {
+          const transferAmount = BigInt(amountDeltaString);
+          if (fromAddress) {
+            applyDelta(fromAddress, asset, -transferAmount);
+          }
+          if (toAddress) {
+            applyDelta(toAddress, asset, transferAmount);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    logger.info(`Computed ${deltas.size} share delta entries for ${dateString}`);
+    return deltas;
+  }
+
+  private async calculateUnstakeShareDelta(asset: string, amountDelta: string, round: any): Promise<bigint> {
+    if (round === null || round === undefined) {
+      return BigInt(amountDelta);
+    }
+
+    const roundBigInt = typeof round === 'bigint' ? round : BigInt(round);
+    const { pricePerShare, ppsScale } = await this.getPricePerShare(asset, roundBigInt);
+
+    const unsignedAmount = amountDelta.startsWith('-') ? amountDelta.slice(1) : amountDelta;
+    const underlyingAssets = BigInt(unsignedAmount);
+    const ppsScaleFactor = 10n ** ppsScale;
+
+    const sharesAmount = (underlyingAssets * ppsScaleFactor) / pricePerShare;
+    return amountDelta.startsWith('-') ? -sharesAmount : sharesAmount;
+  }
+
+  private async validateShareBalanceReconstruction(
+    previousDateString: string,
+    dateString: string,
+    shareDeltas: Map<string, bigint>,
+    db: any,
+  ): Promise<void> {
+    if (shareDeltas.size === 0) {
+      logger.info(`No share deltas detected for ${dateString}; skipping validation.`);
+      return;
+    }
+
+    const deltaPairs = Array.from(shareDeltas.keys()).map((key) => {
+      const [address, asset] = key.split(':');
+      return [address, asset] as [string, string];
+    });
+
+    let currentBalances: any[] = [];
+    if (deltaPairs.length > 0) {
+      currentBalances = await db('share_balances')
+        .whereIn(['address', 'asset'], deltaPairs)
+        .select('address', 'asset', 'shares');
+    }
+
+    const balanceMap = new Map<string, bigint>();
+    for (const balance of currentBalances) {
+      const key = `${balance.address.toLowerCase()}:${balance.asset}`;
+      balanceMap.set(key, BigInt(balance.shares));
+    }
+
+    const negativeFindings: Array<{ address: string; asset: string; delta: bigint; reconstructed: bigint }> = [];
+
+    for (const [key, delta] of shareDeltas.entries()) {
+      const [address, asset] = key.split(':');
+      const reconstructedShares = balanceMap.get(key) || 0n;
+
+      if (reconstructedShares + delta < 0n) {
+        negativeFindings.push({
+          address,
+          asset,
+          delta,
+          reconstructed: reconstructedShares,
+        });
+      }
+    }
+
+    if (negativeFindings.length > 0) {
+      const details = negativeFindings
+        .map((finding) => `address=${finding.address}, asset=${finding.asset}, delta=${finding.delta.toString()}, reconstructedShares=${finding.reconstructed.toString()}`)
+        .join('; ');
+      const errorMsg = `Negative balance risk detected while rolling back ${dateString} (previous day ${previousDateString}): ${details}`;
+      logger.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    logger.info(`Validated ${shareDeltas.size} share deltas for ${dateString}; no negative balances detected after reconstruction.`);
+  }
+
+  private async getPricePerShare(assetSymbol: string, round: bigint): Promise<{ pricePerShare: bigint; ppsScale: bigint }> {
+    const contractConfig = CONTRACTS[assetSymbol as keyof typeof CONTRACTS];
+    if (!contractConfig) {
+      throw new Error(`No contract config found for asset ${assetSymbol}`);
+    }
+
+    if (!this.alchemyService) {
+      this.alchemyService = AlchemyService.getInstance();
+    }
+
+    const viemEthClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.ETHEREUM);
+
+    const pricePerShareRound = round > 1n ? round - 1n : 1n;
+
+    const pricePerShare = await withAlchemyRetry(async () => {
+      return await viemEthClient.readContract({
+        address: contractConfig.ethereum as `0x${string}`,
+        abi: STREAM_VAULT_ABI,
+        functionName: 'roundPricePerShare',
+        args: [pricePerShareRound],
+      }) as bigint;
+    }, `${assetSymbol} vault price per share for round ${pricePerShareRound}`);
+
+    return {
+      pricePerShare,
+      ppsScale: contractConfig.ppsScale,
+    };
+  }
+
   /**
-   * Start real-time processing (snapshots at configured time in UTC)
+   * Starts real-time processing
    */
   private async startRealtimeProcessing(): Promise<void> {
     logger.info('Starting real-time processing mode...');
     
-    // Run initial check to see if we need to process yesterday
     await this.checkAndRunLiveFill();
     
-    // Start the timer loop that checks every second for the configured live fill time UTC
     const checkInterval = setInterval(async () => {
       if (!this.isRunning) {
         clearInterval(checkInterval);
@@ -609,7 +823,6 @@ export class MainOrchestrator {
       const hours = now.getUTCHours();
       const minutes = now.getUTCMinutes();
       
-      // Check if it's the configured live fill time UTC
       if (hours === CONSTANTS.LIVE_FILL_TIME.HOURS && minutes === CONSTANTS.LIVE_FILL_TIME.MINUTES) {
         try {
           await this.checkAndRunLiveFill();
@@ -617,24 +830,21 @@ export class MainOrchestrator {
           logger.error('Error during scheduled live fill:', error);
         }
       }
-    }, 1000); // Check every second
+    }, 1000);
     
     logger.info('Real-time processing loop started');
   }
 
   /**
-   * Check if live fill needs to run and execute it
+   * Checks if live fill needs to run and executes it
    */
   private async checkAndRunLiveFill(): Promise<void> {
     const now = new Date();
-    // Get yesterday's date in UTC
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setUTCHours(0, 0, 0, 0); // Set to midnight UTC
+    yesterday.setUTCHours(0, 0, 0, 0);
     const yesterdayString = yesterday.toISOString().split('T')[0];
     
-    
-    // Check if this date is already processed
     const existingSnapshot = await this.db('daily_snapshots')
       .where('snapshot_date', yesterdayString)
       .first();
@@ -643,37 +853,31 @@ export class MainOrchestrator {
       return;
     }
     
-    // Run live fill for yesterday
     await this.runLiveFill(yesterdayString);
   }
 
   /**
-   * Run live fill for a specific date (assumes backfill is complete)
+   * Runs live fill for a specific date
+   * Live fill is essentially backfill for yesterday's date, so it uses the same block range calculation
    */
   private async runLiveFill(dateString: string): Promise<void> {
     logger.info(`Starting live fill for date: ${dateString}`);
     
     try {
-      // Step 1: Validate that backfill is up to date
       await this.validateBackfillStatus(dateString);
       
-      // Step 2: Calculate block ranges for all active chains
       const processingDate = new Date(dateString + 'T00:00:00.000Z');
-      const { blockRanges, endBlocks } = await this.calculateLiveFillBlockRanges(processingDate);
+      const { blockRanges, endBlocks } = await this.calculateBlockRanges(processingDate);
       
       if (blockRanges.length === 0) {
         logger.warn(`No block ranges found for live fill on ${dateString}, skipping`);
         return;
       }
       
-      
-      // Step 3: Process the day using DailySnapshotService
       await this.dailySnapshotService.processDailySnapshot(dateString, blockRanges);
       
-      // Step 4: Update progress cursors
       await this.updateProgressCursors(blockRanges, dateString);
       
-      // Step 5: Store block timestamps for this date
       await this.storeBlockTimestamps(dateString, endBlocks);
       
       logger.info(`Live fill completed successfully for ${dateString}`);
@@ -685,10 +889,9 @@ export class MainOrchestrator {
   }
 
   /**
-   * Validate that backfill is up to date (last snapshot should be 2 days ago)
+   * Validates that backfill is up to date
    */
   private async validateBackfillStatus(targetDateString: string): Promise<void> {
-    // Get the most recent snapshot date
     const lastSnapshot = await this.db('daily_snapshots')
       .select('snapshot_date')
       .orderBy('snapshot_date', 'desc')
@@ -704,104 +907,15 @@ export class MainOrchestrator {
     const targetDate = new Date(targetDateString);
     const daysDifference = Math.floor((targetDate.getTime() - lastSnapshotDate.getTime()) / (1000 * 60 * 60 * 24));
     
-    
-    // If the gap is more than 1 day, we need to run backfill to catch up
     if (daysDifference > 1) {
       logger.warn(`Gap detected between last snapshot (${lastSnapshot.snapshot_date}) and target date (${targetDateString}). Running backfill to catch up...`);
       await this.runBackfill();
     }
   }
 
-  /**
-   * Calculate block ranges for live fill (all chains assumed active)
-   */
-  private async calculateLiveFillBlockRanges(processingDate: Date): Promise<{blockRanges: BlockRange[], endBlocks: Record<number, {block: number, timestamp: Date}>}> {
-    const dateString = processingDate.toISOString().split('T')[0];
-    const blockRanges: BlockRange[] = [];
-    
-    // Get the latest blocks for all chains at 11:59:59 PM UTC for this date
-    const endOfDayISO = dateStringToEndOfDayISO(dateString);
-    const networkNames = getSupportedNetworkNames();
-    
-    // Get progress cursors for all chains
-    const cursors = await this.getProgressCursors();
-    
-    // Create starting blocks mapping from progress cursors for binary search
-    const startingBlocks: Record<string, number> = {};
-    const chainIdToNetwork = getChainIdToNetworkNameMapping();
-    
-    for (const cursor of cursors) {
-      const networkName = chainIdToNetwork[cursor.chain_id];
-      if (networkName) {
-        // Use last processed block as starting point for binary search
-        startingBlocks[networkName] = cursor.last_processed_block;
-      }
-    }
-    
-    const endBlocks = await blocksBeforeTimestamp(endOfDayISO, networkNames, { startingBlocks });
-    
-    // Get all supported chain IDs
-    const supportedChainIds = getSupportedChainIds();
-    const cursorMap = new Map(cursors.map(c => [c.chain_id, c]));
-
-    const endBlocksForStorage: Record<number, {block: number, timestamp: Date}> = {};
-    const endOfDay = new Date(endOfDayISO);
-    
-    // For live fill, assume all chains are active
-    for (const chainId of supportedChainIds) {
-      const cursor = cursorMap.get(chainId);
-      if (!cursor) {
-        logger.warn(`No progress cursor found for chain ${chainId} during live fill`);
-        continue;
-      }
-      
-      const networkName = chainIdToNetwork[chainId];
-      if (!networkName || !endBlocks[networkName]) {
-        logger.warn(`No end block found for chain ${chainId} (${cursor.chain_name}) during live fill`);
-        continue;
-      }
-      
-      const endBlock = endBlocks[networkName];
-      endBlocksForStorage[chainId] = { block: endBlock, timestamp: endOfDay };
-      
-      // Get deployment info for this chain
-      const deploymentInfo = Object.values(DEPLOYMENT_INFO.CHAIN_DEPLOYMENTS).find(info => info.chainId === chainId);
-      if (!deploymentInfo) {
-        logger.warn(`No deployment info found for chain ${chainId} during live fill`);
-        continue;
-      }
-      
-      let lastProcessedBlock = cursor.last_processed_block;
-      
-      // If last processed block is below the chain's earliest block, set it to earliestBlock - 1
-      if (lastProcessedBlock < deploymentInfo.earliestBlock) {
-        lastProcessedBlock = deploymentInfo.earliestBlock - 1;
-      }
-      
-      // For live fill, start from last processed block + 1
-      const fromBlock = lastProcessedBlock + 1;
-      
-      // CRITICAL: fromBlock should never be > endBlock in live fill
-      if (fromBlock > endBlock) {
-        const error = `CRITICAL BUG in live fill: fromBlock ${fromBlock} > endBlock ${endBlock} for chain ${chainId}. This indicates a date calculation or block retrieval error.`;
-        logger.error(error);
-        throw new Error(error);
-      }
-      
-      const blockRange: BlockRange = {
-        chainId,
-        fromBlock,
-        toBlock: endBlock,
-      };
-      
-      blockRanges.push(blockRange);
-    }
-    
-    return { blockRanges, endBlocks: endBlocksForStorage };
-  }
 
   /**
-   * Get system status
+   * Gets system status
    */
   async getStatus(): Promise<{
     isRunning: boolean;

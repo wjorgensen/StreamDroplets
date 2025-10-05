@@ -34,7 +34,6 @@ export async function testConnection(): Promise<boolean> {
   try {
     const db = getDb();
     await db.raw('SELECT 1');
-    console.log('Database connection test successful');
     return true;
   } catch (error: any) {
     console.error('Database connection failed:', {

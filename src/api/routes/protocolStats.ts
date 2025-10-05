@@ -63,26 +63,27 @@ export const protocolStatsRoutes: FastifyPluginAsync = async (fastify) => {
         logger.warn(`Failed to parse total integration breakdown: ${e}`);
       }
 
-      // Return the daily snapshot data verbatim with parsed JSON fields
+      // Return the daily snapshot data with parsed JSON fields
+      // USD values are stored with 6 implied decimals, so divide by 1,000,000
       const protocolStats = {
         id: snapshotRecord.id,
         snapshotDate: snapshotRecord.snapshot_date,
-        totalProtocolUsd: snapshotRecord.total_protocol_usd,
+        totalProtocolUsd: (parseFloat(snapshotRecord.total_protocol_usd) / 1_000_000).toFixed(6),
         totalXethShares: snapshotRecord.total_xeth_shares,
-        totalXethUsd: snapshotRecord.total_xeth_usd,
+        totalXethUsd: (parseFloat(snapshotRecord.total_xeth_usd) / 1_000_000).toFixed(6),
         totalXbtcShares: snapshotRecord.total_xbtc_shares,
-        totalXbtcUsd: snapshotRecord.total_xbtc_usd,
+        totalXbtcUsd: (parseFloat(snapshotRecord.total_xbtc_usd) / 1_000_000).toFixed(6),
         totalXusdShares: snapshotRecord.total_xusd_shares,
-        totalXusdUsd: snapshotRecord.total_xusd_usd,
+        totalXusdUsd: (parseFloat(snapshotRecord.total_xusd_usd) / 1_000_000).toFixed(6),
         totalXeurShares: snapshotRecord.total_xeur_shares,
-        totalXeurUsd: snapshotRecord.total_xeur_usd,
+        totalXeurUsd: (parseFloat(snapshotRecord.total_xeur_usd) / 1_000_000).toFixed(6),
         totalIntegrationBreakdown,
         totalUsers: snapshotRecord.total_users,
         dailyProtocolDroplets: snapshotRecord.daily_protocol_droplets,
         totalProtocolDroplets: snapshotRecord.total_protocol_droplets,
-        ethUsdPrice: snapshotRecord.eth_usd_price,
-        btcUsdPrice: snapshotRecord.btc_usd_price,
-        eurUsdPrice: snapshotRecord.eur_usd_price,
+        ethUsdPrice: snapshotRecord.eth_usd_price ? (parseFloat(snapshotRecord.eth_usd_price) / 1_000_000).toFixed(6) : null,
+        btcUsdPrice: snapshotRecord.btc_usd_price ? (parseFloat(snapshotRecord.btc_usd_price) / 1_000_000).toFixed(6) : null,
+        eurUsdPrice: snapshotRecord.eur_usd_price ? (parseFloat(snapshotRecord.eur_usd_price) / 1_000_000).toFixed(6) : null,
         snapshotTimestamp: snapshotRecord.snapshot_timestamp,
         createdAt: snapshotRecord.created_at,
       };

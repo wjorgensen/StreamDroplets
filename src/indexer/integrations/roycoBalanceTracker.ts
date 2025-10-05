@@ -54,7 +54,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Smart sync of Royco deposits - full sync if table empty, incremental if data exists
+   * Syncs Royco deposits from the API using full or incremental sync strategy
    */
   async syncRoycoDeposits(): Promise<void> {
     try {
@@ -75,7 +75,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Perform full sync without checking for existing entries
+   * Performs a full sync of all Royco deposits without checking for duplicates
    */
   private async performFullSync(): Promise<void> {
     let page = 1;
@@ -103,7 +103,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Perform incremental sync checking for existing entries
+   * Performs an incremental sync that only adds new deposits
    */
   private async performIncrementalSync(): Promise<void> {
     const existingIds = new Set(await this.db('royco_deposits').pluck('royco_id'));
@@ -139,7 +139,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Process both Royco deposits and withdrawals for a specific block range and date
+   * Processes Royco deposits and withdrawals for a block range
    */
   async processRoycoEvents(
     fromBlock: number,
@@ -161,7 +161,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Process Royco deposit events for a specific block range and date
+   * Processes Royco deposit events for a block range
    */
   private async processRoycoDeposits(
     fromBlock: number,
@@ -179,6 +179,7 @@ export class RoycoBalanceTracker {
       
       await this.storeEvents(events, eventDate);
       await this.updateUserBalances(events, eventDate);
+      await this.markVaultTransfersForDeposits(deposits, eventDate);
       
       const depositIds = deposits.map(d => d.id);
       await this.db('royco_deposits')
@@ -193,7 +194,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Process Royco withdrawal events using daily_events table
+   * Processes Royco withdrawal events using the daily_events table
    */
   private async processRoycoWithdrawals(
     _fromBlock: number,
@@ -271,7 +272,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Fetch deposits from Royco API with retry logic
+   * Fetches deposits from the Royco API with retry logic
    */
   private async fetchDepositsFromAPI(page: number = 1, size: number = 500): Promise<RoycoDeposit[]> {
     return await withRoycoRetry(async () => {
@@ -301,7 +302,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Store deposits in database with optional conflict handling
+   * Stores deposits in the database with optional conflict handling
    */
   private async storeDepositsInDatabase(deposits: RoycoDeposit[], isIncremental: boolean): Promise<void> {
     if (deposits.length === 0) return;
@@ -331,7 +332,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Get deposits for a specific block range
+   * Retrieves deposits for a specific block range from the database
    */
   private async getDepositsForBlockRange(fromBlock: number, toBlock: number): Promise<any[]> {
     return await this.db('royco_deposits')
@@ -341,7 +342,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Get active weiroll wallet addresses
+   * Retrieves active weiroll wallet addresses from the database
    */
   private async getActiveWeirollWallets(): Promise<string[]> {
     const wallets = await this.db('royco_deposits')
@@ -352,7 +353,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Convert deposit record to event format
+   * Converts a deposit record to a RoycoEvent object
    */
   private convertDepositToEvent(deposit: any, _eventDate: string): RoycoEvent {
     return {
@@ -373,7 +374,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Store events in the daily_integration_events table
+   * Stores Royco events in the daily_integration_events table
    */
   private async storeEvents(events: RoycoEvent[], eventDate: string): Promise<void> {
     if (events.length === 0) return;
@@ -398,16 +399,32 @@ export class RoycoBalanceTracker {
       counterparty_address: null,
     }));
 
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        return true;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipping Royco events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Royco events with zero amount_delta`);
+    }
+
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(nonZeroEventRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Royco events`);
+    logger.debug(`Stored ${nonZeroEventRecords.length} Royco events`);
   }
 
   /**
-   * Update user balances based on events
+   * Updates user balances based on processed events
    */
   private async updateUserBalances(events: RoycoEvent[], eventDate: string): Promise<void> {
     const userEvents = new Map<string, RoycoEvent[]>();
@@ -435,7 +452,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Update a single user's balance
+   * Updates a single user's balance in the database
    */
   private async updateUserBalance(userAddress: string, amountChange: bigint, blockNumber: number, eventDate: string): Promise<void> {
     const currentBalance = await this.db('integration_balances')
@@ -481,8 +498,7 @@ export class RoycoBalanceTracker {
   }
 
   /**
-   * Clean up share_balances table by removing entries for active weiroll wallets
-   * Weiroll wallets are integration addresses and should not appear in share_balances
+   * Removes share_balances entries for active weiroll wallets
    */
   private async cleanupShareBalancesForWeirollWallets(): Promise<void> {
     try {
@@ -506,6 +522,37 @@ export class RoycoBalanceTracker {
     } catch (error) {
       logger.error('Failed to cleanup share balances for weiroll wallets:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Marks vault transfers in daily_events corresponding to Royco deposits
+   */
+  private async markVaultTransfersForDeposits(deposits: any[], eventDate: string): Promise<void> {
+    for (const deposit of deposits) {
+      const fromAddress = deposit.account_address.toLowerCase();
+      const toAddress = deposit.weiroll_wallet.toLowerCase();
+      const amount = deposit.token_amount;
+
+      const updated = await this.db('daily_events')
+        .where('event_date', eventDate)
+        .where('chain_id', CONSTANTS.CHAIN_IDS.SONIC)
+        .where('event_type', 'transfer')
+        .where('asset', 'xUSD')
+        .whereRaw('lower(from_address) = ?', [fromAddress])
+        .whereRaw('lower(to_address) = ?', [toAddress])
+        .where('amount_delta', amount)
+        .update({ isIntegrationAddress: 'to' });
+
+      if (updated === 0) {
+        logger.warn('No matching vault transfer found for Royco deposit', {
+          depositId: deposit.id,
+          fromAddress,
+          toAddress,
+          amount,
+          eventDate,
+        });
+      }
     }
   }
 }

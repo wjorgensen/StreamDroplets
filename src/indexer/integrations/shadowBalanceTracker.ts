@@ -6,7 +6,7 @@
 import { decodeEventLog, getAddress } from 'viem';
 import { INTEGRATION_CONTRACTS, getTokenPosition } from '../../config/contracts';
 import { SHADOW_PAIR_ABI } from '../../config/abis/shadowPair';
-import { CONSTANTS } from '../../config/constants';
+import { CONSTANTS, BlockRange } from '../../config/constants';
 import { createLogger } from '../../utils/logger';
 import { getDb } from '../../db/connection';
 import { AlchemyService } from '../../utils/AlchemyService';
@@ -46,9 +46,16 @@ export class ShadowBalanceTracker {
     this.alchemyService = AlchemyService.getInstance();
     logger.info('Initialized Shadow Balance Tracker');
   }
+
+  /**
+   * Converts an event date string to a Date object with UTC midnight timestamp
+   */
+  private getEventTimestamp(eventDate: string): Date {
+    return new Date(`${eventDate}T00:00:00.000Z`);
+  }
   
   /**
-   * Verifies Shadow Exchange transfers and updates isIntegrationAddress field based on whether they are liquidity adds or swaps
+   * Verifies Shadow Exchange transfers and classifies them as liquidity operations or swaps
    */
   async verifyShadowTransfers(
     eventDate: string,
@@ -58,12 +65,13 @@ export class ShadowBalanceTracker {
     logger.info(`Verifying Shadow Exchange transfers for ${eventDate}`);
     
     try {
-      // Get all daily_events marked as 'shadow_to' or 'shadow_from' for this date range
       const shadowTransfers = await this.db('daily_events')
         .where('event_date', eventDate)
         .where(builder => {
           builder.where('isIntegrationAddress', 'shadow_to')
-            .orWhere('isIntegrationAddress', 'shadow_from');
+            .orWhere('isIntegrationAddress', 'shadow_from')
+            .orWhere('isIntegrationAddress', 'shadow_pending_to')
+            .orWhere('isIntegrationAddress', 'shadow_pending_from');
         })
         .whereBetween('block_number', [fromBlock, toBlock])
         .where('chain_id', CONSTANTS.CHAIN_IDS.SONIC);
@@ -73,46 +81,82 @@ export class ShadowBalanceTracker {
         return;
       }
       
-      // Get all liquidity mints from daily_integration_events for the same period
-      const liquidityMints = await this.db('daily_integration_events')
+      const liquidityEvents = await this.db('daily_integration_events')
         .where('event_date', eventDate)
         .where('protocol_name', 'shadow_exchange')
-        .where('event_type', 'mint')
+        .whereIn('event_type', ['mint', 'burn'])
         .whereBetween('block_number', [fromBlock, toBlock])
         .where('chain_id', CONSTANTS.CHAIN_IDS.SONIC);
       
-      // Create a map of mint transactions for quick lookup
       const mintTxMap = new Map<string, any>();
-      for (const mint of liquidityMints) {
-        const txKey = `${mint.tx_hash}_${mint.address.toLowerCase()}`;
-        mintTxMap.set(txKey, mint);
+      const burnTxMap = new Map<string, any>();
+      
+      for (const event of liquidityEvents) {
+        const txKey = `${event.tx_hash}_${event.address.toLowerCase()}_${this.normalizeAmount(event.amount_delta)}`;
+        
+        if (event.event_type === 'mint') {
+          mintTxMap.set(txKey, event);
+        } else if (event.event_type === 'burn') {
+          burnTxMap.set(txKey, event);
+        }
       }
       
-      // Process each shadow transfer
       for (const transfer of shadowTransfers) {
-        if (transfer.isIntegrationAddress === 'shadow_to') {
-          // Shadow contract is receiving tokens - check if it's a liquidity addition
-          const txKey = `${transfer.tx_hash}_${transfer.to_address.toLowerCase()}`;
+        const normalizedAmount = this.normalizeAmount(transfer.amount_delta);
+        
+        if (transfer.isIntegrationAddress === 'shadow_pending_to') {
+          const userAddress = transfer.from_address.toLowerCase();
+          const txKey = `${transfer.tx_hash}_${userAddress}_${normalizedAmount}`;
           
           if (mintTxMap.has(txKey)) {
-            // This transfer corresponds to a liquidity mint - it's a liquidity addition
             await this.db('daily_events')
               .where('id', transfer.id)
               .update({ isIntegrationAddress: 'to' });
             
-            logger.debug(`Marked transfer ${transfer.tx_hash} as liquidity addition`);
+            logger.debug(`Marked router transfer ${transfer.tx_hash} as liquidity addition`);
           } else {
-            // This transfer doesn't have a corresponding mint - it's a DEX swap
             await this.db('daily_events')
               .where('id', transfer.id)
               .update({ isIntegrationAddress: null });
             
-            logger.debug(`Marked transfer ${transfer.tx_hash} as DEX swap`);
+            logger.debug(`Marked router transfer ${transfer.tx_hash} as swap input`);
+          }
+        } else if (transfer.isIntegrationAddress === 'shadow_pending_from') {
+          const userAddress = transfer.to_address.toLowerCase();
+          const txKey = `${transfer.tx_hash}_${userAddress}_${normalizedAmount}`;
+          
+          if (burnTxMap.has(txKey)) {
+            await this.db('daily_events')
+              .where('id', transfer.id)
+              .update({ isIntegrationAddress: 'from' });
+            
+            logger.debug(`Marked router transfer ${transfer.tx_hash} as liquidity withdrawal`);
+          } else {
+            await this.db('daily_events')
+              .where('id', transfer.id)
+              .update({ isIntegrationAddress: null });
+            
+            logger.debug(`Marked router transfer ${transfer.tx_hash} as swap output`);
+          }
+        } else if (transfer.isIntegrationAddress === 'shadow_to') {
+          const userAddress = transfer.from_address.toLowerCase();
+          const txKey = `${transfer.tx_hash}_${userAddress}_${normalizedAmount}`;
+          
+          if (mintTxMap.has(txKey)) {
+            await this.db('daily_events')
+              .where('id', transfer.id)
+              .update({ isIntegrationAddress: 'to' });
+            
+            logger.debug(`Marked direct pool transfer ${transfer.tx_hash} as liquidity addition`);
+          } else {
+            await this.db('daily_events')
+              .where('id', transfer.id)
+              .update({ isIntegrationAddress: null });
+            
+            logger.debug(`Marked direct pool transfer ${transfer.tx_hash} as DEX swap`);
           }
         } else if (transfer.isIntegrationAddress === 'shadow_from') {
-          // Shadow contract is sending tokens - this is likely a liquidity withdrawal
-          // Keep the shadow_from designation as this is legitimate shadow interaction
-          logger.debug(`Keeping transfer ${transfer.tx_hash} as shadow withdrawal`);
+          logger.debug(`Keeping direct pool transfer ${transfer.tx_hash} as shadow withdrawal`);
         }
       }
       
@@ -124,16 +168,40 @@ export class ShadowBalanceTracker {
     }
   }
 
-  // Process Shadow Exchange events for a block range
-  async processShadowEvents(
+  /**
+   * Normalizes an amount value to a positive string representation
+   */
+  private normalizeAmount(value: string | null | undefined): string {
+    if (value === null || value === undefined) {
+      return '0';
+    }
+
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return '0';
+    }
+
+    try {
+      const bigintValue = BigInt(trimmed);
+      return bigintValue < 0n ? (-bigintValue).toString() : bigintValue.toString();
+    } catch (error) {
+      logger.warn({ value }, 'Failed to normalize amount');
+      return '0';
+    }
+  }
+
+  /**
+   * Fetches and stores Shadow Exchange events for a block range
+   */
+  async fetchEventsForRange(
     fromBlock: number,
     toBlock: number,
     eventDate: string
   ): Promise<void> {
-    logger.info(`Processing Shadow Exchange events from blocks ${fromBlock} to ${toBlock}`);
+    logger.info(`Fetching Shadow Exchange events from blocks ${fromBlock} to ${toBlock}`);
     
     try {
-      const events = await this.fetchPoolEvents(fromBlock, toBlock);
+      const events = await this.fetchPoolEvents(fromBlock, toBlock, eventDate);
       
       if (events.length === 0) {
         logger.debug('No Shadow Exchange events found in block range');
@@ -141,27 +209,114 @@ export class ShadowBalanceTracker {
       }
       
       await this.storeEvents(events, eventDate);
-      await this.updateUserBalances(events, eventDate);
       
-      await this.verifyShadowTransfers(eventDate, fromBlock, toBlock);
-      
-      logger.info(`Processed ${events.length} Shadow Exchange events`);
+      logger.info(`Stored ${events.length} Shadow Exchange events`);
     } catch (error) {
-      logger.error('Failed to process Shadow Exchange events:', error);
+      logger.error('Failed to fetch Shadow Exchange events:', error);
       throw error;
     }
   }
 
-  // Fetch events from both Shadow pools in parallel
+  /**
+   * Processes stored Shadow Exchange events to update user balances
+   */
+  async processEventsForRange(range: BlockRange, eventDate: string): Promise<void> {
+    if (range.chainId !== CONSTANTS.CHAIN_IDS.SONIC) {
+      logger.warn(`Shadow Exchange not supported on chain ${range.chainId}`);
+      return;
+    }
+
+    logger.info(`Processing stored Shadow events for blocks ${range.fromBlock} to ${range.toBlock}`);
+
+    const records = await this.db('daily_integration_events')
+      .where({
+        event_date: eventDate,
+        protocol_name: 'shadow_exchange',
+        chain_id: range.chainId,
+      })
+      .whereBetween('block_number', [range.fromBlock, range.toBlock])
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    if (records.length === 0) {
+      logger.debug('No stored Shadow events found for processing');
+      return;
+    }
+
+    const aggregates = new Map<string, {
+      shareDelta: bigint;
+      assetDelta: bigint;
+      lastBlock: number;
+    }>();
+
+    for (const record of records) {
+      const key = `${record.address}_${record.contract_address}`;
+      const shareDelta = this.toBigInt(record.shares_delta);
+      const eventType = record.event_type as string;
+      const assetDelta = (eventType === 'mint' || eventType === 'burn')
+        ? this.toBigInt(record.amount_delta)
+        : 0n;
+
+      if (shareDelta === 0n && assetDelta === 0n) {
+        continue;
+      }
+
+      const existing = aggregates.get(key);
+      if (existing) {
+        aggregates.set(key, {
+          shareDelta: existing.shareDelta + shareDelta,
+          assetDelta: existing.assetDelta + assetDelta,
+          lastBlock: Math.max(existing.lastBlock, record.block_number ?? 0),
+        });
+      } else {
+        aggregates.set(key, {
+          shareDelta,
+          assetDelta,
+          lastBlock: record.block_number ?? 0,
+        });
+      }
+    }
+
+    if (aggregates.size === 0) {
+      logger.debug('No balance changes derived from stored Shadow events');
+      return;
+    }
+
+    for (const [key, aggregate] of aggregates.entries()) {
+      if (aggregate.shareDelta === 0n && aggregate.assetDelta === 0n) {
+        continue;
+      }
+
+      const [address, contractAddress] = key.split('_');
+      await this.updateUserBalance(
+        address,
+        contractAddress,
+        aggregate.shareDelta,
+        aggregate.assetDelta,
+        aggregate.lastBlock,
+        eventDate
+      );
+    }
+
+    await this.verifyShadowTransfers(eventDate, range.fromBlock, range.toBlock);
+
+    logger.info(`Applied Shadow balance updates for ${aggregates.size} address(es)`);
+  }
+
+  /**
+   * Fetches events from all Shadow Exchange pools in parallel
+   */
   private async fetchPoolEvents(
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<ShadowEvent[]> {
     const allEvents: ShadowEvent[] = [];
 
     try {
       const poolPromises = this.SHADOW_POOLS.map(poolAddress => 
-        this.fetchSinglePoolEvents(poolAddress, fromBlock, toBlock)
+        this.fetchSinglePoolEvents(poolAddress, fromBlock, toBlock, eventDate)
       );
       
       const poolResults = await Promise.all(poolPromises);
@@ -178,11 +333,14 @@ export class ShadowBalanceTracker {
     }
   }
 
-  // Fetch events from a single Shadow pool
+  /**
+   * Fetches events from a single Shadow Exchange pool
+   */
   private async fetchSinglePoolEvents(
     poolAddress: string,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<ShadowEvent[]> {
     const events: ShadowEvent[] = [];
 
@@ -198,12 +356,12 @@ export class ShadowBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodeLogToEvent(log, poolAddress);
+          const event = await this.decodeLogToEvent(log, poolAddress, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -215,8 +373,10 @@ export class ShadowBalanceTracker {
     }
   }
 
-  // Decode a blockchain log to a ShadowEvent
-  private async decodeLogToEvent(log: any, poolAddress: string): Promise<ShadowEvent | null> {
+  /**
+   * Decodes a blockchain log into a ShadowEvent object
+   */
+  private async decodeLogToEvent(log: any, poolAddress: string, eventDate: string): Promise<ShadowEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: SHADOW_PAIR_ABI,
@@ -224,11 +384,10 @@ export class ShadowBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
-
       switch ((decodedLog as any).eventName) {
         case 'Mint': {
           const { sender, amount0, amount1 } = decodedLog.args as any;
+          const timestamp = this.getEventTimestamp(eventDate);
           
           return {
             chainId: CONSTANTS.CHAIN_IDS.SONIC,
@@ -249,6 +408,7 @@ export class ShadowBalanceTracker {
 
         case 'Burn': {
           const { amount0, amount1, to } = decodedLog.args as any;
+          const timestamp = this.getEventTimestamp(eventDate);
           
           return {
             chainId: CONSTANTS.CHAIN_IDS.SONIC,
@@ -273,6 +433,7 @@ export class ShadowBalanceTracker {
           const { checkZeroAddress } = require('../../config/contracts');
           const isFromZero = checkZeroAddress(from);
           const isToZero = checkZeroAddress(to);
+          const timestamp = this.getEventTimestamp(eventDate);
           
           if (isFromZero) {
             return {
@@ -305,6 +466,21 @@ export class ShadowBalanceTracker {
               rawData: decodedLog,
             };
           } else {
+            const fromAddress = getAddress(from as string);
+            const toAddress = getAddress(to as string);
+            const fromIsShadowPool = this.SHADOW_POOLS.some(pool => getAddress(pool) === fromAddress);
+            const toIsShadowPool = this.SHADOW_POOLS.some(pool => getAddress(pool) === toAddress);
+            
+            if (fromIsShadowPool && toIsShadowPool) {
+              logger.debug('Skipping LP transfer between Shadow pools', {
+                from: fromAddress,
+                to: toAddress,
+                txHash: log.transactionHash,
+                logIndex: log.logIndex,
+              });
+              return null;
+            }
+            
             return {
               chainId: CONSTANTS.CHAIN_IDS.SONIC,
               contractAddress: getAddress(poolAddress),
@@ -313,8 +489,8 @@ export class ShadowBalanceTracker {
               eventType: 'transfer',
               userAddress: getAddress(to as string),
               amount: value.toString(),
-              fromAddress: getAddress(from as string),
-              toAddress: getAddress(to as string),
+              fromAddress: fromAddress,
+              toAddress: toAddress,
               blockNumber: log.blockNumber,
               timestamp,
               txHash: log.transactionHash,
@@ -325,7 +501,6 @@ export class ShadowBalanceTracker {
         }
 
         default:
-          logger.warn(`Unknown event type: ${decodedLog.eventName}`);
           return null;
       }
     } catch (error) {
@@ -336,7 +511,9 @@ export class ShadowBalanceTracker {
     return null;
   }
 
-  // Get xUSD amount represented by LP tokens using actual pair balances
+  /**
+   * Calculates the xUSD value of LP tokens based on pool reserves
+   */
   async getLPTokenValue(poolAddress: string, lpTokenAmount: bigint): Promise<bigint> {
     try {
       const sonicViemClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.SONIC);
@@ -353,13 +530,11 @@ export class ShadowBalanceTracker {
         return 0n;
       }
       
-      // Get xUSD address from environment
       const xusdAddress = process.env.XUSD_TOKEN_ADDRESS_SONIC;
       if (!xusdAddress) {
         throw new Error('XUSD_TOKEN_ADDRESS_SONIC not configured in environment');
       }
       
-      // Get xUSD token balance held by the pair
       const xusdBalanceAtPair = await withAlchemyRetry(async () => {
         return await sonicViemClient.readContract({
           address: xusdAddress as `0x${string}`,
@@ -369,7 +544,6 @@ export class ShadowBalanceTracker {
         }) as bigint;
       }, `xUSD balance for Shadow Exchange pool ${poolAddress}`);
       
-      // Calculate pro-rata xUSD amount
       const xusdAmount = (xusdBalanceAtPair * lpTokenAmount) / totalSupply;
       
       return xusdAmount;
@@ -377,7 +551,6 @@ export class ShadowBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('returned no data ("0x")') || 
           errorMessage.includes('contract does not have the function') ||
           errorMessage.includes('address is not a contract')) {
@@ -390,7 +563,100 @@ export class ShadowBalanceTracker {
     }
   }
 
-  // Store Shadow Exchange events in database
+  /**
+   * Resolves actual user addresses from daily_events for router-mediated transactions
+   */
+  private async resolveUserAddresses(
+    eventRecords: any[],
+    eventDate: string
+  ): Promise<any[]> {
+    const routerAddress = INTEGRATION_CONTRACTS.SHADOW_EXCHANGE.SONIC.ROUTER.toLowerCase();
+    const needsResolution = eventRecords.filter(
+      record => record.address === routerAddress && (record.event_type === 'mint' || record.event_type === 'burn')
+    );
+
+    if (needsResolution.length === 0) {
+      return eventRecords;
+    }
+
+    const pendingTransfers = await this.db('daily_events')
+      .where('event_date', eventDate)
+      .where(builder => {
+        builder.where('isIntegrationAddress', 'shadow_pending_to')
+          .orWhere('isIntegrationAddress', 'shadow_pending_from');
+      })
+      .where('chain_id', CONSTANTS.CHAIN_IDS.SONIC)
+      .select('tx_hash', 'from_address', 'to_address', 'amount_delta', 'isIntegrationAddress');
+
+    const pendingToMap = new Map<string, any>();
+    const pendingFromMap = new Map<string, any>();
+
+    for (const transfer of pendingTransfers) {
+      const normalizedAmount = this.normalizeAmount(transfer.amount_delta);
+      const key = `${transfer.tx_hash}_${normalizedAmount}`;
+
+      if (transfer.isIntegrationAddress === 'shadow_pending_to') {
+        pendingToMap.set(key, transfer);
+      } else if (transfer.isIntegrationAddress === 'shadow_pending_from') {
+        pendingFromMap.set(key, transfer);
+      }
+    }
+
+    const resolvedRecords = eventRecords.map(record => {
+      if (record.address !== routerAddress) {
+        return record;
+      }
+
+      const normalizedAmount = this.normalizeAmount(record.amount_delta);
+      const key = `${record.tx_hash}_${normalizedAmount}`;
+
+      if (record.event_type === 'mint') {
+        const pendingTransfer = pendingToMap.get(key);
+        if (pendingTransfer) {
+          logger.debug(`Resolved mint user address from router to ${pendingTransfer.from_address}`, {
+            tx_hash: record.tx_hash,
+            amount: normalizedAmount
+          });
+          return {
+            ...record,
+            address: pendingTransfer.from_address.toLowerCase(),
+          };
+        } else {
+          logger.warn(`Could not resolve user address for mint event`, {
+            tx_hash: record.tx_hash,
+            amount: normalizedAmount,
+            router_address: routerAddress
+          });
+        }
+      } else if (record.event_type === 'burn') {
+        const pendingTransfer = pendingFromMap.get(key);
+        if (pendingTransfer) {
+          logger.debug(`Resolved burn user address from router to ${pendingTransfer.to_address}`, {
+            tx_hash: record.tx_hash,
+            amount: normalizedAmount
+          });
+          return {
+            ...record,
+            address: pendingTransfer.to_address.toLowerCase(),
+          };
+        } else {
+          logger.warn(`Could not resolve user address for burn event`, {
+            tx_hash: record.tx_hash,
+            amount: normalizedAmount,
+            router_address: routerAddress
+          });
+        }
+      }
+
+      return record;
+    });
+
+    return resolvedRecords;
+  }
+
+  /**
+   * Stores Shadow Exchange events in the daily_integration_events table
+   */
   private async storeEvents(events: ShadowEvent[], eventDate: string): Promise<void> {
     if (events.length === 0) return;
     
@@ -398,7 +664,6 @@ export class ShadowBalanceTracker {
       let amountDelta = '0';
       
       if (event.eventType === 'mint' || event.eventType === 'burn') {
-        // Calculate xUSD amount based on token position
         const xusdTokenPosition = getTokenPosition(event.contractAddress);
         if (event.token0Amount && event.token1Amount && xusdTokenPosition !== undefined) {
           const xusdAmount = xusdTokenPosition === 0 ? BigInt(event.token0Amount) : BigInt(event.token1Amount);
@@ -427,67 +692,39 @@ export class ShadowBalanceTracker {
       };
     });
 
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        logger.warn('Failed to parse amount_delta, excluding record', { 
+          amount_delta: record.amount_delta,
+          tx_hash: record.tx_hash 
+        });
+        return false;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipping Shadow events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Shadow events with zero amount_delta`);
+    }
+
+    const resolvedRecords = await this.resolveUserAddresses(nonZeroEventRecords, eventDate);
+
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(resolvedRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Shadow events`);
+    logger.debug(`Stored ${resolvedRecords.length} Shadow events`);
   }
 
-  // Update user balances based on processed events
-  private async updateUserBalances(events: ShadowEvent[], eventDate: string): Promise<void> {
-    const userEvents = new Map<string, ShadowEvent[]>();
-    for (const event of events) {
-      const userKey = `${event.userAddress.toLowerCase()}_${event.contractAddress.toLowerCase()}`;
-      if (!userEvents.has(userKey)) {
-        userEvents.set(userKey, []);
-      }
-      userEvents.get(userKey)!.push(event);
-    }
-
-    for (const [userKey, userEventList] of userEvents) {
-      const [userAddress, poolAddress] = userKey.split('_');
-      let netShareChange = 0n;
-      let netAssetChange = 0n;
-      
-      const processedTxs = new Set<string>();
-      
-      for (const event of userEventList) {
-        const txKey = `${event.txHash}_${event.logIndex}`;
-        if (processedTxs.has(txKey)) continue;
-        processedTxs.add(txKey);
-        
-        const delta = event.eventType === 'mint' ? BigInt(event.amount || '0') :
-                      event.eventType === 'burn' ? -BigInt(event.amount || '0') :
-                      event.eventType === 'transfer' ? BigInt(event.amount || '0') : 0n;
-        
-        netShareChange += delta;
-        
-        if (event.eventType === 'mint' && event.token0Amount && event.token1Amount) {
-          // Use only xUSD amount based on token position
-          const xusdTokenPosition = getTokenPosition(event.contractAddress);
-          if (xusdTokenPosition !== undefined) {
-            const xusdAmount = xusdTokenPosition === 0 ? BigInt(event.token0Amount) : BigInt(event.token1Amount);
-            netAssetChange += xusdAmount;
-          }
-        } else if (event.eventType === 'burn' && event.token0Amount && event.token1Amount) {
-          // Use only xUSD amount based on token position
-          const xusdTokenPosition = getTokenPosition(event.contractAddress);
-          if (xusdTokenPosition !== undefined) {
-            const xusdAmount = xusdTokenPosition === 0 ? BigInt(event.token0Amount) : BigInt(event.token1Amount);
-            netAssetChange -= xusdAmount;
-          }
-        }
-      }
-
-      if (netShareChange !== 0n) {
-        await this.updateUserBalance(userAddress, poolAddress, netShareChange, netAssetChange, userEventList[0].blockNumber, eventDate);
-      }
-    }
-  }
-
-  // Update a single user's balance in database
+  /**
+   * Updates a user's balance in the database based on share and asset changes
+   */
   private async updateUserBalance(userAddress: string, poolAddress: string, shareChange: bigint, assetChange: bigint, blockNumber: number, eventDate: string): Promise<void> {
     const currentBalance = await this.db('integration_balances')
       .where({
@@ -532,6 +769,31 @@ export class ShadowBalanceTracker {
           last_updated: new Date(),
           last_updated_date: eventDate,
         });
+    }
+  }
+
+  /**
+   * Converts a value to a BigInt with safe error handling
+   */
+  private toBigInt(value: any): bigint {
+    if (value === null || value === undefined) {
+      return 0n;
+    }
+
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    const str = String(value);
+    if (str.trim().length === 0) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(str);
+    } catch (error) {
+      logger.warn(`Failed to convert value to BigInt: ${value}`, error);
+      return 0n;
     }
   }
 

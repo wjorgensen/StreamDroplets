@@ -61,6 +61,7 @@ export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
         .countDistinct('address as count');
       
       // Format the leaderboard data
+      // USD values are stored with 6 implied decimals, so divide by 1,000,000
       const formattedLeaderboard = leaderboardData.map((entry, index) => {
         let integrationBreakdown = {};
         try {
@@ -74,23 +75,23 @@ export const leaderboardRoutes: FastifyPluginAsync = async (fastify) => {
           address: entry.address,
           totalDroplets: entry.total_droplets,
           lastActive: entry.last_active,
-          totalUsdValue: entry.total_usd_value,
+          totalUsdValue: (parseFloat(entry.total_usd_value) / 1_000_000).toFixed(6),
           balances: {
             xeth: {
               shares: entry.xeth_shares_total,
-              usdValue: entry.xeth_usd_value,
+              usdValue: (parseFloat(entry.xeth_usd_value) / 1_000_000).toFixed(6),
             },
             xbtc: {
               shares: entry.xbtc_shares_total,
-              usdValue: entry.xbtc_usd_value,
+              usdValue: (parseFloat(entry.xbtc_usd_value) / 1_000_000).toFixed(6),
             },
             xusd: {
               shares: entry.xusd_shares_total,
-              usdValue: entry.xusd_usd_value,
+              usdValue: (parseFloat(entry.xusd_usd_value) / 1_000_000).toFixed(6),
             },
             xeur: {
               shares: entry.xeur_shares_total,
-              usdValue: entry.xeur_usd_value,
+              usdValue: (parseFloat(entry.xeur_usd_value) / 1_000_000).toFixed(6),
             },
           },
           integrationBreakdown,

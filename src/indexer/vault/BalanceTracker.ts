@@ -31,22 +31,18 @@ export class BalanceTracker extends EventEmitter {
 
   /**
    * Processes daily events from database for multiple chains and updates share balances
-   * Then updates underlying assets using price per share from ETH vault contracts
    */
   async processEventsFromDatabase(
     blockRanges: BlockRange[]
   ): Promise<void> {
     logger.info(`Processing events for ${blockRanges.length} chains`);
     
-    // Initialize balance cache for this processing session
     this.balanceCache.clear();
     
-    // Find ETH chain block range to use for PPS calculations
     const ethRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.ETHEREUM);
     
     let totalEventsProcessed = 0;
     
-    // Process each chain's events
     for (const range of blockRanges) {
       logger.info(`Processing chain ${range.chainId} from block ${range.fromBlock} to ${range.toBlock}`);
       
@@ -58,7 +54,11 @@ export class BalanceTracker extends EventEmitter {
             .orWhere('isIntegrationAddress', 'from')
             .orWhere('isIntegrationAddress', 'to')
             .orWhere('isIntegrationAddress', 'shadow_to')
-            .orWhere('isIntegrationAddress', 'shadow_from');
+            .orWhere('isIntegrationAddress', 'shadow_from')
+            .orWhere('isIntegrationAddress', 'shadow_pending_to')
+            .orWhere('isIntegrationAddress', 'shadow_pending_from')
+            .orWhere('isIntegrationAddress', 'silo_pending_from')
+            .orWhere('isIntegrationAddress', 'silo_pending_to');
         })
         .orderBy('block_number')
         .orderBy('tx_hash')
@@ -66,7 +66,6 @@ export class BalanceTracker extends EventEmitter {
       
       logger.info(`Found ${events.length} events for chain ${range.chainId}`);
       
-      // Process each event
       for (const event of events) {
         await this.processEvent(event);
       }
@@ -77,10 +76,8 @@ export class BalanceTracker extends EventEmitter {
     
     logger.info(`Processed ${totalEventsProcessed} total events across all chains`);
     
-    // Validate all balance changes before committing
     await this.validateAndCommitBalanceChanges();
     
-    // Update underlying assets using ETH block if available, otherwise use cached PPS
     if (ethRange) {
       logger.info(`Updating underlying assets using ETH block ${ethRange.toBlock}`);
       await this.updateUnderlyingAssets(ethRange.toBlock);
@@ -96,13 +93,11 @@ export class BalanceTracker extends EventEmitter {
   private async processEvent(event: any): Promise<void> {
     const { event_type, from_address, to_address, amount_delta, asset, chain_id, block_number, timestamp, event_date, isIntegrationAddress, round } = event;
     
-    // Handle integration events with special rules
     if (isIntegrationAddress) {
       await this.processIntegrationEvent(event);
       return;
     }
     
-    // Handle normal events
     switch (event_type) {
       case 'redeem':
         if (from_address) {
@@ -112,45 +107,30 @@ export class BalanceTracker extends EventEmitter {
         
       case 'unstake':
         if (from_address) {
-          // For unstake events, we need to convert underlying asset amount back to shares
-          if (round !== null && round !== undefined) {
-            logger.info(`Processing unstake event with underlying assets conversion`, {
-              user: from_address,
-              asset,
-              underlyingAssets: amount_delta,
-              round: round.toString(),
-              chainId: chain_id
-            });
-            
-            // Get price per share for the round when this unstake happened
-            const { pricePerShare, ppsScale } = await this.getPricePerShare(asset, BigInt(round));
-            
-            // Convert underlying asset amount back to shares
-            const underlyingAssets = BigInt(amount_delta.toString().replace('-', '')); // Remove negative sign
-            const ppsScaleFactor = 10n ** ppsScale; 
-            const sharesAmount = (underlyingAssets * ppsScaleFactor) / pricePerShare;
-            const sharesDelta = `-${sharesAmount.toString()}`; // Make it negative for balance deduction
-            
-            logger.info(`Converted underlying assets to shares`, {
-              underlyingAssets: underlyingAssets.toString(),
-              pricePerShare: pricePerShare.toString(),
-              ppsScale: ppsScale.toString(),
-              calculatedShares: sharesAmount.toString(),
-              sharesDelta
-            });
-            
-            await this.updateShareBalance(from_address, asset, sharesDelta, block_number, timestamp, event_date);
-          } else {
-            // Fallback to treating as share amount if no round information (legacy events or data migration)
-            logger.warn(`Unstake event without round information, treating as shares`, {
-              user: from_address,
-              asset,
-              amount_delta,
-              round: round,
-              chainId: chain_id
-            });
-            await this.updateShareBalance(from_address, asset, amount_delta, block_number, timestamp, event_date);
-          }
+          logger.info(`Processing unstake event with underlying assets conversion`, {
+            user: from_address,
+            asset,
+            underlyingAssets: amount_delta,
+            round: round.toString(),
+            chainId: chain_id
+          });
+          
+          const { pricePerShare, ppsScale } = await this.getPricePerShare(asset, BigInt(round));
+          
+          const underlyingAssets = BigInt(amount_delta.toString().replace('-', ''));
+          const ppsScaleFactor = 10n ** ppsScale; 
+          const sharesAmount = (underlyingAssets * ppsScaleFactor) / pricePerShare;
+          const sharesDelta = `-${sharesAmount.toString()}`;
+          
+          logger.info(`Converted underlying assets to shares`, {
+            underlyingAssets: underlyingAssets.toString(),
+            pricePerShare: pricePerShare.toString(),
+            ppsScale: ppsScale.toString(),
+            calculatedShares: sharesAmount.toString(),
+            sharesDelta
+          });
+          
+          await this.updateShareBalance(from_address, asset, sharesDelta, block_number, timestamp, event_date);
         }
         break;
         
@@ -161,19 +141,6 @@ export class BalanceTracker extends EventEmitter {
         }
         break;
 
-      case 'oft_sent':
-        // OFT sent event - tokens are burned from sender's balance
-        if (from_address) {
-          await this.updateShareBalance(from_address, asset, amount_delta, block_number, timestamp, event_date);
-        }
-        break;
-
-      case 'oft_received':
-        // OFT received event - tokens are minted to recipient's balance  
-        if (to_address) {
-          await this.updateShareBalance(to_address, asset, amount_delta, block_number, timestamp, event_date);
-        }
-        break;
     }
   }
 
@@ -184,41 +151,45 @@ export class BalanceTracker extends EventEmitter {
     const { event_type, from_address, to_address, amount_delta, asset, block_number, timestamp, event_date, isIntegrationAddress } = event;
     
     if (event_type !== 'transfer') {
-      return; // Only process transfer events for integrations
+      return;
     }
     
     switch (isIntegrationAddress) {
       case 'from':
+      case 'silo_pending_from':
         if (to_address) {
           await this.updateShareBalance(to_address, asset, amount_delta, block_number, timestamp, event_date);
         }
         break;
         
       case 'to':
+      case 'silo_pending_to':
         if (from_address) {
           await this.updateShareBalance(from_address, asset, `-${amount_delta}`, block_number, timestamp, event_date);
         }
         break;
         
       case 'shadow_to':
-        // Shadow contract is receiving tokens - subtract from user balance
+      case 'shadow_pending_to':
         if (from_address) {
           await this.updateShareBalance(from_address, asset, `-${amount_delta}`, block_number, timestamp, event_date);
         }
         break;
         
       case 'shadow_from':
-        // Shadow contract is sending tokens - add to user balance  
+      case 'shadow_pending_from':
         if (to_address) {
           await this.updateShareBalance(to_address, asset, amount_delta, block_number, timestamp, event_date);
         }
+        break;
+        
+      case 'siloRouter':
         break;
     }
   }
 
   /**
-   * Updates share balance for a user based on amount delta (consolidated across all chains)
-   * Now uses in-memory cache to accumulate changes before database commit
+   * Updates share balance for a user based on amount delta
    */
   private async updateShareBalance(
     userAddress: string,
@@ -232,11 +203,9 @@ export class BalanceTracker extends EventEmitter {
     const deltaAmount = BigInt(amountDelta);
     const updateDate = eventDate || timestamp.toISOString().split('T')[0];
     
-    // Get or create cache entry
     let balanceChange = this.balanceCache.get(cacheKey);
     
     if (!balanceChange) {
-      // Load current balance from database
       const currentBalance = await this.db('share_balances')
         .where({
           address: userAddress,
@@ -246,7 +215,6 @@ export class BalanceTracker extends EventEmitter {
       
       const currentShares = currentBalance ? BigInt(currentBalance.shares) : 0n;
       
-      // Initialize cache entry
       balanceChange = {
         address: userAddress,
         asset: asset,
@@ -260,10 +228,8 @@ export class BalanceTracker extends EventEmitter {
       this.balanceCache.set(cacheKey, balanceChange);
     }
     
-    // Apply the delta to the final shares
     balanceChange.finalShares += deltaAmount;
     
-    // Update metadata with latest event info
     if (blockNumber > balanceChange.lastUpdateBlock) {
       balanceChange.lastUpdateBlock = blockNumber;
       balanceChange.lastUpdated = timestamp;
@@ -272,14 +238,13 @@ export class BalanceTracker extends EventEmitter {
   }
 
   /**
-   * Validates all cached balance changes and commits them to database if no negative balances found
+   * Validates all cached balance changes and commits them to database
    */
   private async validateAndCommitBalanceChanges(): Promise<void> {
     logger.info(`Validating ${this.balanceCache.size} cached balance changes`);
     
     const negativeBalances: BalanceChange[] = [];
     
-    // Check for negative final balances
     for (const balanceChange of this.balanceCache.values()) {
       if (balanceChange.finalShares < 0n) {
         negativeBalances.push(balanceChange);
@@ -287,14 +252,12 @@ export class BalanceTracker extends EventEmitter {
       }
     }
     
-    // If any negative balances found, throw error
     if (negativeBalances.length > 0) {
       const errorMsg = `Found ${negativeBalances.length} negative balances after processing all daily events. This indicates missing transfers or incorrect event ordering.`;
       logger.error(errorMsg);
       throw new Error(errorMsg);
     }
     
-    // All balances are valid, commit changes to database
     logger.info(`All balance changes are valid, committing to database`);
     
     let updatedCount = 0;
@@ -305,7 +268,6 @@ export class BalanceTracker extends EventEmitter {
       const { address, asset, currentShares, finalShares, lastUpdateBlock, lastUpdated, lastUpdatedDate } = balanceChange;
       
       if (finalShares === 0n) {
-        // Delete zero balances
         if (currentShares > 0n) {
           const deleteResult = await this.db('share_balances')
             .where({
@@ -319,9 +281,7 @@ export class BalanceTracker extends EventEmitter {
           }
         }
       } else {
-        // Update or insert non-zero balances
         if (currentShares > 0n) {
-          // Update existing balance
           await this.db('share_balances')
             .where({
               address: address,
@@ -335,12 +295,11 @@ export class BalanceTracker extends EventEmitter {
             });
           updatedCount++;
         } else {
-          // Insert new balance
           await this.db('share_balances').insert({
             address: address,
             asset: asset,
             shares: finalShares.toString(),
-            underlying_assets: null, // Will be calculated later by updateUnderlyingAssets
+            underlying_assets: null,
             last_update_block: lastUpdateBlock,
             last_updated: lastUpdated,
             last_updated_date: lastUpdatedDate,
@@ -352,12 +311,12 @@ export class BalanceTracker extends EventEmitter {
     
     logger.info(`Balance changes committed: ${updatedCount} updated, ${insertedCount} inserted, ${deletedCount} deleted`);
     
-    // Clear cache after successful commit
     this.balanceCache.clear();
   }
 
   /**
-   * Gets price per share for a specific asset and round from the vault contract on Ethereum
+   * Gets price per share for a specific asset and round from vault contract
+   * Note: Always uses round - 1 because the current round's price per share is not finalized
    */
   private async getPricePerShare(
     assetSymbol: string, 
@@ -370,19 +329,20 @@ export class BalanceTracker extends EventEmitter {
 
     const viemEthClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.ETHEREUM);
     
-    // Get price per share for the specified round with retry logic
+    const pricePerShareRound = round > 1n ? round - 1n : 1n;
+    
     const pricePerShare = await withAlchemyRetry(async () => {
       const params: any = {
         address: contractConfig.ethereum as `0x${string}`,
         abi: STREAM_VAULT_ABI,
         functionName: 'roundPricePerShare',
-        args: [round]
+        args: [pricePerShareRound]
       };
       
       return await viemEthClient.readContract(params) as bigint;
-    }, `${assetSymbol} vault price per share for round ${round}`);
+    }, `${assetSymbol} vault price per share for round ${pricePerShareRound}`);
     
-    logger.info(`${assetSymbol} price per share for round ${round}: ${pricePerShare.toString()} (scale: ${contractConfig.ppsScale.toString()})`);
+    logger.info(`${assetSymbol} price per share for round ${pricePerShareRound} (current round: ${round}): ${pricePerShare.toString()} (scale: ${contractConfig.ppsScale.toString()})`);
     
     return {
       pricePerShare,
@@ -391,21 +351,18 @@ export class BalanceTracker extends EventEmitter {
   }
 
   /**
-   * Updates underlying asset values for all share balances by fetching price per share from vault contracts
+   * Updates underlying asset values for all share balances from vault contracts
    */
   private async updateUnderlyingAssets(blockNumber: number): Promise<void> {
     logger.info(`Updating underlying assets at ETH block ${blockNumber}`);
     
     try {
-      // Get viem client for Ethereum
       const viemEthClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.ETHEREUM);
       
-      // Process each vault asset
       for (const [assetSymbol, contractConfig] of Object.entries(CONTRACTS)) {
         logger.info(`Processing ${assetSymbol} vault at ${contractConfig.ethereum}`);
         
         try {
-          // Get current round at block from vault with retry logic
           const currentRound = await withAlchemyRetry(async () => {
             return await viemEthClient.readContract({
               address: contractConfig.ethereum as `0x${string}`,
@@ -417,18 +374,15 @@ export class BalanceTracker extends EventEmitter {
           
           logger.info(`${assetSymbol} current round: ${currentRound.toString()}`);
           
-          // Get price per share for current round using the extracted function
           const { pricePerShare, ppsScale } = await this.getPricePerShare(assetSymbol, currentRound);
           
-          // Get all share balances for this asset
           const shareBalances = await this.db('share_balances')
             .where('asset', assetSymbol)
             .whereNotNull('shares');
           
-          // Update each balance with underlying assets calculation
           for (const balance of shareBalances) {
             const shares = BigInt(balance.shares);
-            const ppsScaleFactor = 10n ** ppsScale; // Convert ppsScale to actual scale factor (10^ppsScale)
+            const ppsScaleFactor = 10n ** ppsScale;
             const underlyingAssets = (shares * pricePerShare) / ppsScaleFactor;
             
             await this.db('share_balances')
@@ -440,7 +394,6 @@ export class BalanceTracker extends EventEmitter {
           
           logger.info(`Updated ${shareBalances.length} ${assetSymbol} share balances with underlying assets`);
           
-          // Store/update price per share in cache
           await this.db('price_per_share_cache')
             .insert({
               asset: assetSymbol,
@@ -460,7 +413,6 @@ export class BalanceTracker extends EventEmitter {
         } catch (error) {
           const errorMessage = (error as Error).message;
           
-          // Check if this is a contract not deployed error
           if (errorMessage.includes('returned no data ("0x")') || 
               errorMessage.includes('contract does not have the function') ||
               errorMessage.includes('address is not a contract')) {
@@ -468,7 +420,6 @@ export class BalanceTracker extends EventEmitter {
             continue;
           }
           
-          // For other errors, rethrow to maintain existing error handling behavior
           logger.error(`Error processing ${assetSymbol} vault:`, error);
           throw error;
         }
@@ -482,13 +433,12 @@ export class BalanceTracker extends EventEmitter {
   }
 
   /**
-   * Updates underlying asset values using cached price per share from database
+   * Updates underlying asset values using cached price per share
    */
   private async updateUnderlyingAssetsFromDB(): Promise<void> {
     logger.info('Updating underlying assets using cached price per share from database');
     
     try {
-      // Get all cached price per share data
       const cachedPpsData = await this.db('price_per_share_cache')
         .select('asset', 'current_price_per_share');
       
@@ -497,7 +447,6 @@ export class BalanceTracker extends EventEmitter {
         return;
       }
       
-      // Process each asset
       for (const ppsData of cachedPpsData) {
         const assetSymbol = ppsData.asset;
         const pricePerShare = BigInt(ppsData.current_price_per_share);
@@ -510,15 +459,13 @@ export class BalanceTracker extends EventEmitter {
         
         logger.info(`Processing ${assetSymbol} with cached PPS: ${pricePerShare.toString()}`);
         
-        // Get all share balances for this asset
         const shareBalances = await this.db('share_balances')
           .where('asset', assetSymbol)
           .whereNotNull('shares');
         
-        // Update each balance with underlying assets calculation
         for (const balance of shareBalances) {
           const shares = BigInt(balance.shares);
-          const ppsScaleFactor = 10n ** contractConfig.ppsScale; // Convert ppsScale to actual scale factor (10^ppsScale)
+          const ppsScaleFactor = 10n ** contractConfig.ppsScale;
           const underlyingAssets = (shares * pricePerShare) / ppsScaleFactor;
           
           await this.db('share_balances')

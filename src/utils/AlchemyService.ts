@@ -31,7 +31,7 @@ export class AlchemyService {
   }
 
   /**
-   * Initialize Alchemy instances and viem clients for all supported chains
+   * Initializes Alchemy instances and viem clients for all supported chains
    */
   private initializeAlchemyInstances(): void {
     const apiKey = config.apiKeys.alchemy;
@@ -39,7 +39,6 @@ export class AlchemyService {
       throw new Error('ALCHEMY_API_KEY environment variable is required');
     }
 
-    // Generate chain network mapping from contracts configuration
     const chainNetworkMap = Object.values(SUPPORTED_CHAINS).reduce((acc, chainConfig) => {
       acc[chainConfig.chainId] = chainConfig.alchemyNetwork;
       return acc;
@@ -48,13 +47,11 @@ export class AlchemyService {
     for (const [chainId, network] of Object.entries(chainNetworkMap)) {
       const chainIdNum = parseInt(chainId);
       
-      // Create primary Alchemy instance
       this.alchemyInstances.set(chainIdNum, new Alchemy({
         apiKey,
         network: network as Network,
       }));
 
-      // Create primary viem PublicClient using Alchemy as transport
       const rpcUrl = this.getAlchemyRpcUrl(network, apiKey);
       try {
         this.viemClients.set(chainIdNum, createPublicClient({
@@ -65,19 +62,16 @@ export class AlchemyService {
       }
     }
 
-    // Initialize fallback instances if fallback API key is available
     const fallbackApiKey = config.apiKeys.alchemyFallback;
     if (fallbackApiKey) {
       for (const [chainId, network] of Object.entries(chainNetworkMap)) {
         const chainIdNum = parseInt(chainId);
         
-        // Create fallback Alchemy instance
         this.fallbackAlchemyInstances.set(chainIdNum, new Alchemy({
           apiKey: fallbackApiKey,
           network: network as Network,
         }));
 
-        // Create fallback viem PublicClient using Alchemy as transport
         const rpcUrl = this.getAlchemyRpcUrl(network, fallbackApiKey);
         try {
           this.fallbackViemClients.set(chainIdNum, createPublicClient({
@@ -95,9 +89,13 @@ export class AlchemyService {
   }
 
   /**
-   * Get Alchemy RPC URL for a given network
+   * Gets Alchemy RPC URL for a given network
    */
   private getAlchemyRpcUrl(network: Network, apiKey: string): string {
+    if (network === ('plasma-mainnet' as any)) {
+      return `${CONSTANTS.ALCHEMY_BASE_URLS.PLASMA}${apiKey}`;
+    }
+    
     const rpcUrls: Partial<Record<Network, string>> = {
       [Network.ETH_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.ETHEREUM}${apiKey}`,
       [Network.SONIC_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.SONIC}${apiKey}`,
@@ -105,6 +103,9 @@ export class AlchemyService {
       [Network.BASE_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.BASE}${apiKey}`,
       [Network.ARB_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.ARBITRUM}${apiKey}`,
       [Network.BERACHAIN_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.BERACHAIN}${apiKey}`,
+      [Network.LINEA_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.LINEA}${apiKey}`,
+      [Network.MATIC_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.POLYGON}${apiKey}`,
+      [Network.BNB_MAINNET]: `${CONSTANTS.ALCHEMY_BASE_URLS.BNB}${apiKey}`,
     };
     
     const rpcUrl = rpcUrls[network];
@@ -116,7 +117,7 @@ export class AlchemyService {
   }
 
   /**
-   * Switch to fallback API key if available
+   * Switches to fallback API key if available
    */
   public switchToFallback(): boolean {
     if (this.fallbackAlchemyInstances.size === 0) {
@@ -130,7 +131,7 @@ export class AlchemyService {
   }
 
   /**
-   * Switch back to primary API key
+   * Switches back to primary API key
    */
   public switchToPrimary(): void {
     this.usingFallback = false;
@@ -138,20 +139,19 @@ export class AlchemyService {
   }
 
   /**
-   * Check if currently using fallback
+   * Checks if currently using fallback
    */
   public isUsingFallback(): boolean {
     return this.usingFallback;
   }
 
   /**
-   * Get Alchemy instance for a specific chain
+   * Gets Alchemy instance for a specific chain
    */
   public getAlchemyInstance(chainId: number): Alchemy {
     const instanceMap = this.usingFallback ? this.fallbackAlchemyInstances : this.alchemyInstances;
     const instance = instanceMap.get(chainId);
     if (!instance) {
-      // If fallback fails, try primary as last resort
       if (this.usingFallback) {
         const primaryInstance = this.alchemyInstances.get(chainId);
         if (primaryInstance) {
@@ -165,13 +165,12 @@ export class AlchemyService {
   }
 
   /**
-   * Get viem PublicClient for a specific chain
+   * Gets viem PublicClient for a specific chain
    */
   public getViemClient(chainId: number): PublicClient {
     const clientMap = this.usingFallback ? this.fallbackViemClients : this.viemClients;
     const client = clientMap.get(chainId);
     if (!client) {
-      // If fallback fails, try primary as last resort
       if (this.usingFallback) {
         const primaryClient = this.viemClients.get(chainId);
         if (primaryClient) {
@@ -185,21 +184,21 @@ export class AlchemyService {
   }
 
   /**
-   * Get all Alchemy instances as a Map
+   * Gets all Alchemy instances as a Map
    */
   public getAllAlchemyInstances(): Map<number, Alchemy> {
     return new Map(this.alchemyInstances);
   }
 
   /**
-   * Get all viem clients as a Map
+   * Gets all viem clients as a Map
    */
   public getAllViemClients(): Map<number, PublicClient> {
     return new Map(this.viemClients);
   }
 
   /**
-   * Get supported chain IDs
+   * Gets supported chain IDs
    */
   public getSupportedChainIds(): number[] {
     return Array.from(this.alchemyInstances.keys());

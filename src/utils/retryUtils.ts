@@ -13,14 +13,11 @@ export interface RetryOptions {
   maxRetries: number;
   delayMs?: number;
   backoffMultiplier?: number;
-  operation: string; // Description of the operation for logging
+  operation: string;
 }
 
 /**
  * Generic retry wrapper for async functions
- * @param asyncFunction - The async function to retry
- * @param options - Retry configuration options
- * @returns Promise that resolves with the function result or rejects after all retries fail
  */
 export async function withRetry<T>(
   asyncFunction: () => Promise<T>,
@@ -39,7 +36,10 @@ export async function withRetry<T>(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      logger.debug(`${operation} - Attempt ${attempt}/${maxRetries}`);
+      const shouldLogAttempt = !operation.startsWith('Alchemy: getBlock');
+      if (shouldLogAttempt) {
+        logger.debug(`${operation} - Attempt ${attempt}/${maxRetries}`);
+      }
       const result = await asyncFunction();
       
       if (attempt > 1) {
@@ -50,7 +50,6 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error as Error;
       
-      // Check if this is a contract deployment error - don't retry these
       if (isContractNotDeployedError(lastError)) {
         logger.warn(`${operation} - skipped because contract is not deployed`);
         throw lastError;
@@ -68,33 +67,28 @@ export async function withRetry<T>(
         fullError: lastError
       });
       
-      // Wait before retry with exponential backoff
       await new Promise(resolve => setTimeout(resolve, currentDelay));
       
-      // Apply exponential backoff with max delay cap
       currentDelay = Math.min(currentDelay * backoffMultiplier, maxDelayMs);
     }
   }
 
-  // All retries failed, throw the last error
   throw new Error(`${operation} failed after ${maxRetries} attempts: ${lastError!.message}`);
 }
 
 /**
- * Check if an error indicates a contract that is not deployed at the given block
+ * Checks if an error indicates a contract that is not deployed at the given block
  */
 function isContractNotDeployedError(error: Error): boolean {
   const message = error.message.toLowerCase();
   const errorName = error.constructor.name;
   
-  // Check for viem ContractFunctionExecutionError patterns
   if (errorName === 'ContractFunctionExecutionError') {
     return message.includes('returned no data ("0x")') ||
            message.includes('contract does not have the function') ||
            message.includes('address is not a contract');
   }
   
-  // Check for other viem error types
   if (errorName === 'CallExecutionError' || 
       errorName === 'RpcError' || 
       errorName === 'HttpRequestError') {
@@ -104,12 +98,10 @@ function isContractNotDeployedError(error: Error): boolean {
            message.includes('execution reverted');
   }
   
-  // Check for parameter/syntax errors that should not be retried
   if (errorName === 'SyntaxError') {
     return message.includes('cannot convert') && message.includes('to a bigint');
   }
   
-  // Check for other common patterns indicating undeployed contracts
   return message.includes('contract not deployed') ||
          message.includes('no bytecode') ||
          message.includes('no code at address') ||
@@ -117,7 +109,7 @@ function isContractNotDeployedError(error: Error): boolean {
 }
 
 /**
- * Retry wrapper specifically for Alchemy API calls with fallback support
+ * Retry wrapper for Alchemy API calls with fallback support
  */
 export async function withAlchemyRetry<T>(
   asyncFunction: () => Promise<T>,
@@ -126,19 +118,16 @@ export async function withAlchemyRetry<T>(
   const alchemyService = AlchemyService.getInstance();
   
   try {
-    // First attempt with primary API key
     return await withRetry(asyncFunction, {
       maxRetries: CONSTANTS.MAX_ALCHEMY_RETRIES,
       operation: `Alchemy: ${operation}`
     });
   } catch (primaryError) {
-    // Check if this is a contract not deployed error (don't try fallback)
     if (isContractNotDeployedError(primaryError as Error)) {
       logger.warn(`${operation} - skipped because contract is not deployed`);
       throw primaryError;
     }
     
-    // If primary API key fails and fallback is available, try with fallback
     const switchedToFallback = alchemyService.switchToFallback();
     
     if (switchedToFallback) {
@@ -150,26 +139,23 @@ export async function withAlchemyRetry<T>(
           operation: `Alchemy Fallback: ${operation}`
         });
         
-        // Switch back to primary for next operations
         alchemyService.switchToPrimary();
         return result;
         
       } catch (fallbackError) {
-        // Switch back to primary even if fallback fails
         alchemyService.switchToPrimary();
         
         logger.error(`Both primary and fallback Alchemy APIs failed for "${operation}"`);
         throw new Error(`Alchemy API failed with both keys: Primary - ${(primaryError as Error).message}, Fallback - ${(fallbackError as Error).message}`);
       }
     } else {
-      // No fallback available, throw original error
       throw primaryError;
     }
   }
 }
 
 /**
- * Retry wrapper specifically for Royco API calls
+ * Retry wrapper for Royco API calls
  */
 export async function withRoycoRetry<T>(
   asyncFunction: () => Promise<T>,
@@ -182,7 +168,7 @@ export async function withRoycoRetry<T>(
 }
 
 /**
- * Retry wrapper specifically for Block Time API calls
+ * Retry wrapper for Block Time API calls
  */
 export async function withBlockTimeRetry<T>(
   asyncFunction: () => Promise<T>,

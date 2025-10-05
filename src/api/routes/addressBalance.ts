@@ -48,28 +48,29 @@ export const addressBalanceRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       // Build full response data
+      // USD values are stored with 6 implied decimals, so divide by 1,000,000
       const fullData = {
         address: latestSnapshot.address,
         snapshotDate: latestSnapshot.snapshot_date,
         totalDroplets: latestSnapshot.total_droplets,
         dailyDropletsEarned: latestSnapshot.daily_droplets_earned,
-        totalUsdValue: latestSnapshot.total_usd_value,
+        totalUsdValue: (parseFloat(latestSnapshot.total_usd_value) / 1_000_000).toFixed(6),
         balances: {
           xeth: {
             shares: latestSnapshot.xeth_shares_total,
-            usdValue: latestSnapshot.xeth_usd_value,
+            usdValue: (parseFloat(latestSnapshot.xeth_usd_value) / 1_000_000).toFixed(6),
           },
           xbtc: {
             shares: latestSnapshot.xbtc_shares_total,
-            usdValue: latestSnapshot.xbtc_usd_value,
+            usdValue: (parseFloat(latestSnapshot.xbtc_usd_value) / 1_000_000).toFixed(6),
           },
           xusd: {
             shares: latestSnapshot.xusd_shares_total,
-            usdValue: latestSnapshot.xusd_usd_value,
+            usdValue: (parseFloat(latestSnapshot.xusd_usd_value) / 1_000_000).toFixed(6),
           },
           xeur: {
             shares: latestSnapshot.xeur_shares_total,
-            usdValue: latestSnapshot.xeur_usd_value,
+            usdValue: (parseFloat(latestSnapshot.xeur_usd_value) / 1_000_000).toFixed(6),
           },
         },
         integrationBreakdown,

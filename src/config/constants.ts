@@ -29,6 +29,10 @@ export const CONSTANTS = {
     ARBITRUM: 'https://arb-mainnet.g.alchemy.com/v2/',
     AVALANCHE: 'https://avax-mainnet.g.alchemy.com/v2/',
     BERACHAIN: 'https://berachain-mainnet.g.alchemy.com/v2/',
+    LINEA: 'https://linea-mainnet.g.alchemy.com/v2/',
+    POLYGON: 'https://polygon-mainnet.g.alchemy.com/v2/',
+    BNB: 'https://bnb-mainnet.g.alchemy.com/v2/',
+    PLASMA: 'https://plasma-mainnet.g.alchemy.com/v2/',
   },
 
   /** Database configuration defaults */
@@ -60,7 +64,7 @@ export const CONSTANTS = {
 
   /** Logging configuration */
   LOGGING: {
-    LEVEL: (process.env.LOG_LEVEL as any) || 'info',
+    LEVEL: (process.env.LOG_LEVEL as any) || 'debug',
     PRETTY: process.env.LOG_PRETTY !== 'false', // defaults to true unless explicitly set to 'false'
   },
 
@@ -99,6 +103,10 @@ export const CONSTANTS = {
     ARBITRUM: 42161,
     AVALANCHE: 43114,
     BERACHAIN: 80094,
+    LINEA: 59144,
+    POLYGON: 137,
+    BNB: 56,
+    PLASMA: 9745,
   },
 
   /** LayerZero Endpoint IDs to Chain ID mapping */
@@ -165,6 +173,7 @@ export interface BlockRange {
   chainId: number;
   fromBlock: number;
   toBlock: number;
+  dateString: string;
 }
 
 /** User daily snapshot data structure */

@@ -4,7 +4,7 @@
  */
 
 import { decodeEventLog, getAddress } from 'viem';
-import { CONSTANTS } from '../../config/constants';
+import { CONSTANTS, BlockRange } from '../../config/constants';
 import { INTEGRATION_CONTRACTS } from '../../config/contracts';
 import { ENCLABS_VTOKEN_ABI } from '../../config/abis/enclabsVToken';
 import { createLogger } from '../../utils/logger';
@@ -21,11 +21,11 @@ export interface EnclabsEvent {
   protocolType: 'lending';
   eventType: 'mint' | 'redeem' | 'transfer';
   userAddress: string;
-  amount?: string; // For transfer, this is vTokens; for mint/redeem this is underlying assets
-  vTokens?: string; // For mint/redeem, this is the vToken amount
-  underlyingAmount?: string; // For mint/redeem, this is the underlying assets amount
-  fromAddress?: string; // For transfers
-  toAddress?: string; // For transfers
+  amount?: string;
+  vTokens?: string;
+  underlyingAmount?: string;
+  fromAddress?: string;
+  toAddress?: string;
   blockNumber: number;
   timestamp: Date;
   txHash: string;
@@ -44,17 +44,24 @@ export class EnclabsBalanceTracker {
   }
 
   /**
+   * Converts event date string to timestamp for database storage
+   */
+  private getEventTimestamp(eventDate: string): Date {
+    return new Date(`${eventDate}T00:00:00.000Z`);
+  }
+
+  /**
    * Fetch and process all Enclabs VToken events for a specific block range
    */
-  async processEnclabsEvents(
+  async fetchEventsForRange(
     fromBlock: number,
     toBlock: number,
     eventDate: string
   ): Promise<void> {
-    logger.info(`Processing Enclabs VToken events from blocks ${fromBlock} to ${toBlock}`);
+    logger.info(`Fetching Enclabs VToken events from blocks ${fromBlock} to ${toBlock}`);
     
     try {
-      const events = await this.fetchVTokenEvents(fromBlock, toBlock);
+      const events = await this.fetchVTokenEvents(fromBlock, toBlock, eventDate);
       
       if (events.length === 0) {
         logger.debug('No Enclabs VToken events found in block range');
@@ -62,13 +69,74 @@ export class EnclabsBalanceTracker {
       }
       
       await this.storeEvents(events, eventDate);
-      await this.updateUserBalances(events, eventDate);
       
-      logger.info(`Processed ${events.length} Enclabs VToken events`);
+      logger.info(`Stored ${events.length} Enclabs VToken events`);
     } catch (error) {
-      logger.error('Failed to process Enclabs VToken events:', error);
+      logger.error('Failed to fetch Enclabs VToken events:', error);
       throw error;
     }
+  }
+
+  /**
+   * Process stored Enclabs events and update balances
+   */
+  async processEventsForRange(range: BlockRange, eventDate: string): Promise<void> {
+    if (range.chainId !== CONSTANTS.CHAIN_IDS.SONIC) {
+      logger.warn(`Enclabs not supported on chain ${range.chainId}`);
+      return;
+    }
+
+    logger.info(`Processing stored Enclabs events for blocks ${range.fromBlock} to ${range.toBlock}`);
+
+    const records = await this.db('daily_integration_events')
+      .where({
+        event_date: eventDate,
+        protocol_name: 'enclabs',
+        chain_id: range.chainId,
+      })
+      .whereBetween('block_number', [range.fromBlock, range.toBlock])
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    if (records.length === 0) {
+      logger.debug('No stored Enclabs events found for processing');
+      return;
+    }
+
+    const aggregates = new Map<string, { shareDelta: bigint; lastBlock: number }>();
+
+    for (const record of records) {
+      const shareDelta = this.toBigInt(record.shares_delta);
+      if (shareDelta === 0n) {
+        continue;
+      }
+
+      const address = record.address as string;
+      const existing = aggregates.get(address);
+      if (existing) {
+        aggregates.set(address, {
+          shareDelta: existing.shareDelta + shareDelta,
+          lastBlock: Math.max(existing.lastBlock, record.block_number ?? 0),
+        });
+      } else {
+        aggregates.set(address, {
+          shareDelta,
+          lastBlock: record.block_number ?? 0,
+        });
+      }
+    }
+
+    if (aggregates.size === 0) {
+      logger.debug('No Enclabs balance changes derived from stored events');
+      return;
+    }
+
+    for (const [address, aggregate] of aggregates.entries()) {
+      await this.updateUserBalance(address, aggregate.shareDelta, aggregate.lastBlock, eventDate);
+    }
+
+    logger.info(`Applied Enclabs balance updates for ${aggregates.size} address(es)`);
   }
 
   /**
@@ -76,7 +144,8 @@ export class EnclabsBalanceTracker {
    */
   private async fetchVTokenEvents(
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<EnclabsEvent[]> {
     const events: EnclabsEvent[] = [];
 
@@ -92,12 +161,12 @@ export class EnclabsBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodeLogToEvent(log);
+          const event = await this.decodeLogToEvent(log, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -112,7 +181,7 @@ export class EnclabsBalanceTracker {
   /**
    * Decode a log to an EnclabsEvent
    */
-  private async decodeLogToEvent(log: any): Promise<EnclabsEvent | null> {
+  private async decodeLogToEvent(log: any, eventDate: string): Promise<EnclabsEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: ENCLABS_VTOKEN_ABI,
@@ -120,7 +189,7 @@ export class EnclabsBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
+      const timestamp = this.getEventTimestamp(eventDate);
 
       switch ((decodedLog as any).eventName) {
         case 'Mint': {
@@ -191,7 +260,6 @@ export class EnclabsBalanceTracker {
         }
 
         default:
-          logger.warn(`Unknown event type: ${(decodedLog as any).eventName}`);
           return null;
       }
     } catch (error) {
@@ -202,6 +270,9 @@ export class EnclabsBalanceTracker {
     return null;
   }
 
+  /**
+   * Get current exchange rate from vault contract at specific block
+   */
   async getCurrentExchangeRate(blockNumber: number): Promise<bigint> {
     try {
       const sonicViemClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.SONIC);
@@ -225,7 +296,6 @@ export class EnclabsBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('returned no data ("0x")') || 
           errorMessage.includes('contract does not have the function') ||
           errorMessage.includes('address is not a contract')) {
@@ -238,6 +308,9 @@ export class EnclabsBalanceTracker {
     }
   }
 
+  /**
+   * Update balances with exchange rate at specific block
+   */
   async updateBalancesWithExchangeRate(blockNumber: number): Promise<void> {
     logger.info(`Updating Enclabs balances with exchange rate at block ${blockNumber}`);
     
@@ -279,7 +352,6 @@ export class EnclabsBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('Contract not deployed:')) {
         logger.warn(`Enclabs VToken not deployed at block ${blockNumber}, skipping balance updates`);
         return;
@@ -318,41 +390,28 @@ export class EnclabsBalanceTracker {
       counterparty_address: event.fromAddress?.toLowerCase() || null,
     }));
 
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        return true;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipping Enclabs events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Enclabs events with zero amount_delta`);
+    }
+
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(nonZeroEventRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Enclabs events`);
-  }
-
-  /**
-   * Update user balances based on events
-   */
-  private async updateUserBalances(events: EnclabsEvent[], eventDate: string): Promise<void> {
-    const userEvents = new Map<string, EnclabsEvent[]>();
-    for (const event of events) {
-      const userKey = event.userAddress.toLowerCase();
-      if (!userEvents.has(userKey)) {
-        userEvents.set(userKey, []);
-      }
-      userEvents.get(userKey)!.push(event);
-    }
-
-    for (const [userAddress, userEventList] of userEvents) {
-      let netVTokenChange = 0n;
-      
-      for (const event of userEventList) {
-        const delta = event.eventType === 'mint' ? BigInt(event.vTokens || '0') :
-                      event.eventType === 'redeem' ? -BigInt(event.vTokens || '0') :
-                      event.eventType === 'transfer' ? BigInt(event.vTokens || '0') : 0n;
-        netVTokenChange += delta;
-      }
-
-      if (netVTokenChange !== 0n) {
-        await this.updateUserBalance(userAddress, netVTokenChange, userEventList[0].blockNumber, eventDate);
-      }
-    }
+    logger.debug(`Stored ${nonZeroEventRecords.length} Enclabs events`);
   }
 
   /**
@@ -401,6 +460,31 @@ export class EnclabsBalanceTracker {
           last_updated: new Date(),
           last_updated_date: eventDate,
         });
+    }
+  }
+
+  /**
+   * Convert value to BigInt with error handling
+   */
+  private toBigInt(value: any): bigint {
+    if (value === null || value === undefined) {
+      return 0n;
+    }
+
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    const str = String(value);
+    if (str.trim().length === 0) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(str);
+    } catch (error) {
+      logger.warn(`Failed to convert value to BigInt: ${value}`, error);
+      return 0n;
     }
   }
 

@@ -4,13 +4,12 @@ import { createLogger } from './utils/logger';
 import { testConnection, getDb, closeDb } from './db/connection';
 import dotenv from 'dotenv';
 
-// Load environment variables
 dotenv.config();
 
 const logger = createLogger('Main');
 
 /**
- * Run database migrations
+ * Runs database migrations
  */
 async function runMigrations(): Promise<void> {
   try {
@@ -35,7 +34,6 @@ async function main() {
   try {
     logger.info('Starting StreamDroplets - Multi-Chain Indexer & Orchestrator');
     
-    // Test database connection
     logger.info('Testing database connection...');
     const dbConnected = await testConnection();
     if (!dbConnected) {
@@ -45,21 +43,17 @@ async function main() {
     
     logger.info('Database connected successfully');
     
-    // Run database migrations
     logger.info('Running database migrations...');
     await runMigrations();
     logger.info('Database migrations completed');
     
-    // Initialize the main orchestrator
     logger.info('Initializing MainOrchestrator...');
     orchestrator = new MainOrchestrator();
     
-    // Start the API server
     logger.info('Starting API server...');
     await startServer();
     logger.info(`API server running on port ${process.env.API_PORT || 3000}`);
     
-    // Setup graceful shutdown
     const gracefulShutdown = async () => {
       logger.info('Shutting down gracefully...');
       try {
@@ -77,7 +71,6 @@ async function main() {
       }
     };
     
-    // Setup signal handlers
     process.on('SIGINT', gracefulShutdown);
     process.on('SIGTERM', gracefulShutdown);
     process.on('uncaughtException', (error) => {
@@ -89,13 +82,11 @@ async function main() {
       gracefulShutdown();
     });
     
-    // Start the orchestration service
     logger.info('Starting orchestration service...');
     logger.info('- Initializing AlchemyService for all chains');
     logger.info('- Running historical backfill from deployment dates');
     logger.info('- Starting real-time processing (12:05AM EST daily)');
     
-    // Start orchestrator (this handles backfill then real-time processing)
     await orchestrator.start();
     
     logger.info('=====================================');
@@ -110,7 +101,6 @@ async function main() {
       stack: error.stack
     });
     
-    // Attempt graceful cleanup
     if (orchestrator) {
       try {
         orchestrator.stop();
@@ -129,10 +119,8 @@ async function main() {
   }
 }
 
-// Export main function for testing
 export { main };
 
-// Start the application when run directly
 if (require.main === module) {
   main().catch((error) => {
     console.error('Fatal error starting application:', error);

@@ -5,7 +5,7 @@
  */
 
 import { decodeEventLog, getAddress } from 'viem';
-import { CONSTANTS } from '../../config/constants';
+import { CONSTANTS, BlockRange } from '../../config/constants';
 import { INTEGRATION_CONTRACTS } from '../../config/contracts';
 import { SILO_VAULT_ABI } from '../../config/abis/siloVault';
 import { createLogger } from '../../utils/logger';
@@ -22,11 +22,11 @@ export interface SiloEvent {
   protocolType: 'vault';
   eventType: 'deposit' | 'withdraw' | 'transfer' | 'deposit_protected' | 'withdraw_protected';
   userAddress: string;
-  amount?: string; // For transfer, this is shares; for deposit/withdraw this is assets
-  shares?: string; // For deposit/withdraw, this is the shares amount
-  assets?: string; // For deposit/withdraw, this is the assets amount
-  fromAddress?: string; // For transfers
-  toAddress?: string; // For transfers
+  amount?: string; 
+  shares?: string; 
+  assets?: string; 
+  fromAddress?: string; 
+  toAddress?: string; 
   blockNumber: number;
   timestamp: Date;
   txHash: string;
@@ -55,9 +55,16 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Fetch and process all Silo vault events for a specific block range
+   * Converts an event date string to a Date object with UTC midnight timestamp
    */
-  async processSiloEvents(
+  private getEventTimestamp(eventDate: string): Date {
+    return new Date(`${eventDate}T00:00:00.000Z`);
+  }
+
+  /**
+   * Fetches and stores Silo vault events for a block range
+   */
+  async fetchEventsForRange(
     chainId: number,
     fromBlock: number,
     toBlock: number,
@@ -69,14 +76,13 @@ export class SiloBalanceTracker {
       return;
     }
 
-    logger.info(`Processing Silo vault events from blocks ${fromBlock} to ${toBlock} on chain ${chainId}`);
+    logger.info(`Fetching Silo vault events from blocks ${fromBlock} to ${toBlock} on chain ${chainId}`);
     
     try {
       const allEvents: SiloEvent[] = [];
       
-      // Process events from all vaults on this chain
       for (const vaultAddress of vaultAddresses) {
-        const events = await this.fetchVaultEvents(chainId, vaultAddress, fromBlock, toBlock);
+        const events = await this.fetchVaultEvents(chainId, vaultAddress, fromBlock, toBlock, eventDate);
         allEvents.push(...events);
       }
       
@@ -86,9 +92,8 @@ export class SiloBalanceTracker {
       }
       
       await this.storeEvents(allEvents, eventDate);
-      await this.updateUserBalances(allEvents, eventDate);
       
-      logger.info(`Processed ${allEvents.length} Silo vault events on chain ${chainId}`);
+      logger.info(`Stored ${allEvents.length} Silo vault events on chain ${chainId}`);
     } catch (error) {
       logger.error(`Failed to process Silo vault events on chain ${chainId}:`, error);
       throw error;
@@ -96,13 +101,91 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Fetch events from a specific Silo vault contract
+   * Processes stored Silo events to update user balances
+   */
+  async processEventsForRange(range: BlockRange, eventDate: string): Promise<void> {
+    const vaultAddresses = this.SILO_VAULT_ADDRESSES[range.chainId];
+    if (!vaultAddresses || vaultAddresses.length === 0) {
+      logger.warn(`No Silo vaults configured for chain ${range.chainId}`);
+      return;
+    }
+
+    await this.verifyPendingTransfers(range, eventDate);
+
+    logger.info(`Processing stored Silo events for blocks ${range.fromBlock} to ${range.toBlock} on chain ${range.chainId}`);
+
+    const records = await this.db('daily_integration_events')
+      .where({
+        event_date: eventDate,
+        protocol_name: 'silo_finance',
+        chain_id: range.chainId,
+      })
+      .whereBetween('block_number', [range.fromBlock, range.toBlock])
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    if (records.length === 0) {
+      logger.debug('No stored Silo events found for processing');
+      return;
+    }
+
+    const aggregates = new Map<string, { shareDelta: bigint; lastBlock: number }>();
+
+    for (const record of records) {
+      const shareDelta = this.toBigInt(record.shares_delta);
+      if (shareDelta === 0n) {
+        continue;
+      }
+
+      const key = `${(record.address as string).toLowerCase()}_${(record.contract_address as string).toLowerCase()}`;
+      const existing = aggregates.get(key);
+      if (existing) {
+        aggregates.set(key, {
+          shareDelta: existing.shareDelta + shareDelta,
+          lastBlock: Math.max(existing.lastBlock, record.block_number ?? 0),
+        });
+      } else {
+        aggregates.set(key, {
+          shareDelta,
+          lastBlock: record.block_number ?? 0,
+        });
+      }
+    }
+
+    if (aggregates.size === 0) {
+      logger.debug('No Silo balance changes derived from stored events');
+      return;
+    }
+
+    for (const [key, aggregate] of aggregates.entries()) {
+      if (aggregate.shareDelta === 0n) {
+        continue;
+      }
+
+      const [address, contractAddress] = key.split('_');
+      await this.updateUserBalance(
+        address,
+        contractAddress,
+        range.chainId,
+        aggregate.shareDelta,
+        aggregate.lastBlock,
+        eventDate
+      );
+    }
+
+    logger.info(`Applied Silo balance updates for ${aggregates.size} address(es)`);
+  }
+
+  /**
+   * Fetches events from a specific Silo vault contract
    */
   private async fetchVaultEvents(
     chainId: number,
     vaultAddress: string,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<SiloEvent[]> {
     const events: SiloEvent[] = [];
 
@@ -118,12 +201,12 @@ export class SiloBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodeLogToEvent(log, chainId, vaultAddress);
+          const event = await this.decodeLogToEvent(log, chainId, vaultAddress, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -136,9 +219,9 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Decode a log to a SiloEvent
+   * Decodes a blockchain log into a SiloEvent object
    */
-  private async decodeLogToEvent(log: any, chainId: number, contractAddress: string): Promise<SiloEvent | null> {
+  private async decodeLogToEvent(log: any, chainId: number, contractAddress: string, eventDate: string): Promise<SiloEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: SILO_VAULT_ABI,
@@ -146,7 +229,7 @@ export class SiloBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
+      const timestamp = this.getEventTimestamp(eventDate);
 
       switch ((decodedLog as any).eventName) {
         case 'Deposit': {
@@ -232,7 +315,6 @@ export class SiloBalanceTracker {
         case 'Transfer': {
           const { from, to, value } = decodedLog.args as any;
           
-          // Skip mint/burn transactions (to/from zero address)
           const { checkZeroAddress } = require('../../config/contracts');
           if (checkZeroAddress(from) || checkZeroAddress(to)) {
             return null;
@@ -257,8 +339,19 @@ export class SiloBalanceTracker {
           };
         }
 
+        case 'Borrow':
+        case 'Repay':
+          logger.debug(
+            {
+              txHash: log.transactionHash,
+              logIndex: log.logIndex,
+              eventName: (decodedLog as any).eventName,
+            },
+            'Skipping Silo loan activity event'
+          );
+          return null;
+
         default:
-          logger.warn(`Unknown event type: ${(decodedLog as any).eventName}`);
           return null;
       }
     } catch (error) {
@@ -269,7 +362,9 @@ export class SiloBalanceTracker {
     return null;
   }
 
-
+  /**
+   * Retrieves the current price per share from a Silo vault at a specific block
+   */
   async getCurrentPricePerShare(chainId: number, vaultAddress: string, blockNumber: number): Promise<bigint> {
     try {
       const viemClient = this.alchemyService.getViemClient(chainId);
@@ -294,7 +389,6 @@ export class SiloBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('returned no data ("0x")') || 
           errorMessage.includes('contract does not have the function') ||
           errorMessage.includes('address is not a contract')) {
@@ -307,6 +401,9 @@ export class SiloBalanceTracker {
     }
   }
 
+  /**
+   * Updates all Silo vault balances using the current price per share
+   */
   async updateBalancesWithPricePerShare(chainId: number, blockNumber: number): Promise<void> {
     const vaultAddresses = this.SILO_VAULT_ADDRESSES[chainId];
     if (!vaultAddresses || vaultAddresses.length === 0) {
@@ -327,7 +424,7 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Update balances for a specific vault
+   * Updates balances for a specific Silo vault using price per share
    */
   private async updateVaultBalancesWithPricePerShare(
     chainId: number,
@@ -352,7 +449,7 @@ export class SiloBalanceTracker {
         const newUnderlyingAssets = (shares * pricePerShare) / (10n ** 18n);
         
         const currentUnderlying = BigInt(position.underlying_assets || '0');
-        const changeThreshold = currentUnderlying / 1000n; // 0.1% threshold
+        const changeThreshold = currentUnderlying / 1000n;
 
         if (newUnderlyingAssets > currentUnderlying + changeThreshold || 
             newUnderlyingAssets < currentUnderlying - changeThreshold) {
@@ -372,7 +469,6 @@ export class SiloBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('Contract not deployed:')) {
         logger.warn(`Silo vault ${vaultAddress} not deployed at block ${blockNumber}, skipping balance updates`);
         return;
@@ -384,7 +480,7 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Store events in the daily_integration_events table
+   * Stores Silo vault events in the daily_integration_events table
    */
   private async storeEvents(events: SiloEvent[], eventDate: string): Promise<void> {
     if (events.length === 0) return;
@@ -407,16 +503,219 @@ export class SiloBalanceTracker {
       counterparty_address: event.fromAddress?.toLowerCase() || null,
     }));
 
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        return true;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipping Silo events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Silo events with zero amount_delta`);
+    }
+
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(nonZeroEventRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Silo events`);
+    logger.debug(`Stored ${nonZeroEventRecords.length} Silo events`);
   }
 
   /**
-   * Calculate amount delta based on event type
+   * Verifies pending Silo transfers and classifies them as deposits, withdrawals, or loan activity
+   */
+  private async verifyPendingTransfers(range: BlockRange, eventDate: string): Promise<void> {
+    try {
+      const pendingTransfers = await this.db('daily_events')
+        .select(
+          'id',
+          'tx_hash',
+          'from_address',
+          'to_address',
+          'amount_delta',
+          'isIntegrationAddress'
+        )
+        .where('event_date', eventDate)
+        .where('chain_id', range.chainId)
+        .whereBetween('block_number', [range.fromBlock, range.toBlock])
+        .whereIn('isIntegrationAddress', ['silo_pending_to', 'silo_pending_from'])
+        .orderBy('block_number')
+        .orderBy('log_index');
+
+      if (pendingTransfers.length === 0) {
+        logger.debug('No pending Silo transfers to verify');
+        return;
+      }
+
+      const integrationEvents = await this.db('daily_integration_events')
+        .select('id', 'tx_hash', 'event_type', 'address', 'amount_delta')
+        .where('event_date', eventDate)
+        .where('chain_id', range.chainId)
+        .where('protocol_name', 'silo_finance')
+        .whereBetween('block_number', [range.fromBlock, range.toBlock]);
+
+      interface IntegrationLookupEntry {
+        id: number;
+        tx_hash: string;
+        address: string | null;
+        amount_delta: string;
+        normalizedAmount: string;
+      }
+
+      const depositLookup = new Map<string, IntegrationLookupEntry[]>();
+      const withdrawLookup = new Map<string, IntegrationLookupEntry[]>();
+
+      for (const event of integrationEvents) {
+        const eventType = event.event_type?.toLowerCase();
+        if (!eventType) {
+          continue;
+        }
+
+        const normalizedTxHash = event.tx_hash?.toLowerCase();
+        const normalizedAddress = this.normalizeAddress(event.address);
+        if (!normalizedTxHash || !normalizedAddress) {
+          continue;
+        }
+
+        const normalizedAmount = this.normalizeAmount(event.amount_delta);
+        const key = `${normalizedTxHash}_${normalizedAddress}`;
+        const entry: IntegrationLookupEntry = {
+          id: event.id,
+          tx_hash: normalizedTxHash,
+          address: normalizedAddress,
+          amount_delta: event.amount_delta,
+          normalizedAmount,
+        };
+
+        if (eventType === 'deposit' || eventType === 'deposit_protected') {
+          if (!depositLookup.has(key)) {
+            depositLookup.set(key, []);
+          }
+          depositLookup.get(key)!.push(entry);
+        } else if (eventType === 'withdraw' || eventType === 'withdraw_protected') {
+          if (!withdrawLookup.has(key)) {
+            withdrawLookup.set(key, []);
+          }
+          withdrawLookup.get(key)!.push(entry);
+        }
+      }
+
+      const markDeposits: number[] = [];
+      const markWithdraws: number[] = [];
+      const clearPending: number[] = [];
+
+      for (const transfer of pendingTransfers) {
+        const txHash = transfer.tx_hash?.toLowerCase();
+        if (!txHash) {
+          clearPending.push(transfer.id);
+          continue;
+        }
+
+        const normalizedAmount = this.normalizeAmount(transfer.amount_delta);
+
+        if (transfer.isIntegrationAddress === 'silo_pending_to') {
+          const userAddress = this.normalizeAddress(transfer.from_address);
+          if (!userAddress) {
+            clearPending.push(transfer.id);
+            continue;
+          }
+
+          const key = `${txHash}_${userAddress}`;
+          const possibleDeposits = depositLookup.get(key);
+          const matchIndex = possibleDeposits?.findIndex((entry) => entry.normalizedAmount === normalizedAmount) ?? -1;
+
+          if (matchIndex >= 0 && possibleDeposits) {
+            possibleDeposits.splice(matchIndex, 1);
+            markDeposits.push(transfer.id);
+          } else {
+            clearPending.push(transfer.id);
+          }
+        } else if (transfer.isIntegrationAddress === 'silo_pending_from') {
+          const userAddress = this.normalizeAddress(transfer.to_address);
+          if (!userAddress) {
+            clearPending.push(transfer.id);
+            continue;
+          }
+
+          const key = `${txHash}_${userAddress}`;
+          const possibleWithdraws = withdrawLookup.get(key);
+          const matchIndex = possibleWithdraws?.findIndex((entry) => entry.normalizedAmount === normalizedAmount) ?? -1;
+
+          if (matchIndex >= 0 && possibleWithdraws) {
+            possibleWithdraws.splice(matchIndex, 1);
+            markWithdraws.push(transfer.id);
+          } else {
+            clearPending.push(transfer.id);
+          }
+        }
+      }
+
+      if (markDeposits.length > 0) {
+        await this.db('daily_events')
+          .whereIn('id', markDeposits)
+          .update({ isIntegrationAddress: 'to' });
+        logger.debug(`Confirmed ${markDeposits.length} Silo deposit transfers`);
+      }
+
+      if (markWithdraws.length > 0) {
+        await this.db('daily_events')
+          .whereIn('id', markWithdraws)
+          .update({ isIntegrationAddress: 'from' });
+        logger.debug(`Confirmed ${markWithdraws.length} Silo withdrawal transfers`);
+      }
+
+      if (clearPending.length > 0) {
+        await this.db('daily_events')
+          .whereIn('id', clearPending)
+          .update({ isIntegrationAddress: null });
+        logger.debug(`Cleared ${clearPending.length} Silo loan activity transfers`);
+      }
+    } catch (error) {
+      logger.error('Failed to verify Silo transfers:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Normalizes an address to lowercase format
+   */
+  private normalizeAddress(value: string | null | undefined): string | null {
+    if (!value) {
+      return null;
+    }
+    return value.toLowerCase();
+  }
+
+  /**
+   * Normalizes an amount value to a positive string representation
+   */
+  private normalizeAmount(value: string | null | undefined): string {
+    if (value === null || value === undefined) {
+      return '0';
+    }
+
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return '0';
+    }
+
+    try {
+      const bigintValue = BigInt(trimmed);
+      return bigintValue < 0n ? (-bigintValue).toString() : bigintValue.toString();
+    } catch (error) {
+      logger.warn({ value }, 'Failed to normalize amount');
+      return '0';
+    }
+  }
+
+  /**
+   * Calculates the amount delta based on event type
    */
   private getAmountDelta(event: SiloEvent): string {
     switch (event.eventType) {
@@ -434,7 +733,7 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Calculate shares delta based on event type
+   * Calculates the shares delta based on event type
    */
   private getSharesDelta(event: SiloEvent): string {
     switch (event.eventType) {
@@ -452,65 +751,7 @@ export class SiloBalanceTracker {
   }
 
   /**
-   * Update user balances based on events
-   */
-  private async updateUserBalances(events: SiloEvent[], eventDate: string): Promise<void> {
-    // Group events by user and vault
-    const userVaultEvents = new Map<string, SiloEvent[]>();
-    
-    for (const event of events) {
-      const userVaultKey = `${event.userAddress.toLowerCase()}_${event.contractAddress.toLowerCase()}_${event.chainId}`;
-      if (!userVaultEvents.has(userVaultKey)) {
-        userVaultEvents.set(userVaultKey, []);
-      }
-      userVaultEvents.get(userVaultKey)!.push(event);
-    }
-
-    for (const [userVaultKey, userEventList] of userVaultEvents) {
-      const [userAddress, contractAddress, chainIdStr] = userVaultKey.split('_');
-      const chainId = parseInt(chainIdStr);
-      
-      let netShareChange = 0n;
-      
-      for (const event of userEventList) {
-        const delta = this.calculateShareDelta(event);
-        netShareChange += delta;
-      }
-
-      if (netShareChange !== 0n) {
-        await this.updateUserBalance(
-          userAddress, 
-          contractAddress, 
-          chainId, 
-          netShareChange, 
-          userEventList[0].blockNumber,
-          eventDate
-        );
-      }
-    }
-  }
-
-  /**
-   * Calculate share delta for balance updates
-   */
-  private calculateShareDelta(event: SiloEvent): bigint {
-    switch (event.eventType) {
-      case 'deposit':
-      case 'deposit_protected':
-        return BigInt(event.shares || '0');
-      case 'withdraw':
-      case 'withdraw_protected':
-        return -BigInt(event.shares || '0');
-      case 'transfer':
-        // For transfers, we need to check if this user is receiving or sending
-        return BigInt(event.shares || '0');
-      default:
-        return 0n;
-    }
-  }
-
-  /**
-   * Update a single user's balance for a specific vault
+   * Updates a user's balance for a specific Silo vault
    */
   private async updateUserBalance(
     userAddress: string, 
@@ -536,7 +777,6 @@ export class SiloBalanceTracker {
       logger.warn(`Negative balance detected for ${userAddress} in vault ${contractAddress}: ${newShares}`);
     }
 
-    // For now, set underlying assets equal to shares - will be updated by price per share update
     const underlyingAssets = newShares;
 
     if (currentBalance) {
@@ -563,6 +803,31 @@ export class SiloBalanceTracker {
           last_updated: new Date(),
           last_updated_date: eventDate,
         });
+    }
+  }
+
+  /**
+   * Converts a value to a BigInt with safe error handling
+   */
+  private toBigInt(value: any): bigint {
+    if (value === null || value === undefined) {
+      return 0n;
+    }
+
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    const str = String(value);
+    if (str.trim().length === 0) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(str);
+    } catch (error) {
+      logger.warn(`Failed to convert value to BigInt: ${value}`, error);
+      return 0n;
     }
   }
 }

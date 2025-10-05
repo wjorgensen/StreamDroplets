@@ -34,18 +34,15 @@ export async function up(knex: Knex): Promise<void> {
     table.string('tx_hash', 66).notNullable();
     table.integer('log_index').notNullable();
     table.bigInteger('round').nullable(); // Round number for unstake events (null for other events)
-    table.string('isIntegrationAddress', 10).nullable();
-    table.string('oft_guid', 66).nullable(); // For tracking OFT cross-chain transfers
-    table.integer('dest_chain_id').nullable(); // Destination chain for OFT transfers
+    table.string('isIntegrationAddress', 20).nullable();
     table.timestamp('created_at').defaultTo(knex.fn.now());
     
-    table.unique(['chain_id', 'tx_hash', 'log_index']);
+    table.index(['chain_id', 'tx_hash', 'log_index']);
     table.index(['from_address', 'event_date']);
     table.index(['to_address', 'event_date']);
     table.index(['event_date', 'event_type']);
     table.index(['chain_id', 'block_number']);
     table.index(['round']); // For efficient querying by round
-    table.index(['oft_guid']); // For linking OFT sent/received events
   });
 
   // User daily snapshots - individual user snapshots
@@ -145,7 +142,7 @@ export async function up(knex: Knex): Promise<void> {
     table.string('counterparty_address', 42).nullable();
     table.timestamp('created_at').defaultTo(knex.fn.now());
     
-    table.unique(['chain_id', 'tx_hash', 'log_index']);
+    table.index(['chain_id', 'tx_hash', 'log_index']);
     table.index(['address', 'event_date']);
     table.index(['event_date', 'protocol_name']);
     table.index(['chain_id', 'block_number']);
@@ -231,6 +228,10 @@ export async function up(knex: Knex): Promise<void> {
       { chain_id: 42161, chain_name: 'arbitrum', last_processed_block: 307879462, last_processed_date: '2025-02-17' }, // ARB earliestBlock - 1
       { chain_id: 43114, chain_name: 'avalanche', last_processed_block: 57581228, last_processed_date: '2025-02-17' }, // AVAX earliestBlock - 1
       { chain_id: 80094, chain_name: 'berachain', last_processed_block: 1362867, last_processed_date: '2025-02-17' }, // BERA earliestBlock - 1
+      { chain_id: 59144, chain_name: 'linea', last_processed_block: 22989729, last_processed_date: '2025-09-05' }, // LINEA earliestBlock - 1
+      { chain_id: 137, chain_name: 'polygon', last_processed_block: 76451682, last_processed_date: '2025-09-13' }, // POLYGON earliestBlock - 1
+      { chain_id: 56, chain_name: 'bnb', last_processed_block: 46812628, last_processed_date: '2025-02-19' }, // BNB earliestBlock - 1
+      { chain_id: 9745, chain_name: 'plasma', last_processed_block: 1296516, last_processed_date: '2025-09-17' }, // PLASMA earliestBlock - 1
     ])
     .onConflict('chain_id')
     .ignore();

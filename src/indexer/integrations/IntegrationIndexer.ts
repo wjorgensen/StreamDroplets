@@ -14,14 +14,13 @@ import { SiloBalanceTracker } from './siloBalanceTracker';
 
 const logger = createLogger('IntegrationIndexer');
 
-// Max batch sizes by chain ID (discovered through testing)
 const MAX_BATCHES: Record<number, number> = {
-  1: 100000,     // Ethereum
-  146: 10000,    // Sonic
-  8453: 100000,  // Base
-  42161: 100000, // Arbitrum
-  43114: 10000,  // Avalanche
-  80094: 10000,  // Berachain
+  1: 100000,
+  146: 10000,
+  8453: 100000,
+  42161: 100000,
+  43114: 10000,
+  80094: 10000,
 };
 
 export class IntegrationIndexer {
@@ -54,10 +53,8 @@ export class IntegrationIndexer {
       const blockRangeSize = range.toBlock - range.fromBlock + 1;
       
       if (blockRangeSize <= maxBatchSize) {
-        // Range is within limits, use as-is
         batchedRanges.push(range);
       } else {
-        // Range exceeds limit, break into chunks
         logger.info(`Breaking range for chain ${range.chainId} (${blockRangeSize} blocks) into chunks of max ${maxBatchSize} blocks`);
         
         const chunks = Math.ceil(blockRangeSize / maxBatchSize);
@@ -68,7 +65,8 @@ export class IntegrationIndexer {
           batchedRanges.push({
             chainId: range.chainId,
             fromBlock: chunkFromBlock,
-            toBlock: chunkToBlock
+            toBlock: chunkToBlock,
+            dateString: range.dateString,
           });
           
           logger.debug(`Created chunk ${i + 1}/${chunks} for chain ${range.chainId}: blocks ${chunkFromBlock} to ${chunkToBlock}`);
@@ -80,8 +78,7 @@ export class IntegrationIndexer {
   }
 
   /**
-   * Initialize Royco sync - MUST complete successfully to prevent corrupted tracking
-   * This ensures all historical Royco data is available before processing begins
+   * Initialize Royco sync to ensure all historical data is available before processing
    */
   async initializeRoycoSync(): Promise<void> {
     if (this.roycoInitialized) {
@@ -101,117 +98,117 @@ export class IntegrationIndexer {
 
   /**
    * Fetch and process integration events for multiple chains and block ranges
-   * This is the main function called by DailySnapshotService
-   * Handles batching internally for Alchemy rate limits
    */
   async fetchAndProcessIntegrations(
-    blockRanges: BlockRange[],
-    eventDate: string
+    blockRanges: BlockRange[]
   ): Promise<void> {
     logger.info(`Processing integration events for ${blockRanges.length} block ranges`);
 
-    // Create batched ranges for event fetching to respect Alchemy limits
     logger.info(`Creating batched ranges for integration processing`);
     const batchedIntegrationRanges = this.createBatchedRanges(blockRanges);
     logger.info(`Created ${batchedIntegrationRanges.length} batched integration ranges from ${blockRanges.length} original ranges`);
 
-    // Process Sonic chain integrations using batched ranges
-    const sonicBatchedRanges = batchedIntegrationRanges.filter(range => range.chainId === CONSTANTS.CHAIN_IDS.SONIC);
-    if (sonicBatchedRanges.length > 0) {
-      logger.info(`Processing ${sonicBatchedRanges.length} batched Sonic integration ranges`);
+    await this.fetchIntegrationEvents(batchedIntegrationRanges);
+    await this.processIntegrationEventBalances(blockRanges);
+  }
 
-      try {
-        for (const range of sonicBatchedRanges) {
-          const { fromBlock, toBlock } = range;
-          logger.info(`Processing Sonic integration events from block ${fromBlock} to ${toBlock}`);
-          await this.processSonicIntegrations(fromBlock, toBlock, eventDate);
-        }
-        logger.info('Successfully processed all Sonic integration events');
-      } catch (error) {
-        logger.error('Failed to process Sonic integration events:', error);
-        throw error;
+  private async fetchIntegrationEvents(
+    batchedRanges: BlockRange[]
+  ): Promise<void> {
+    if (batchedRanges.length === 0) {
+      logger.info('No batched ranges provided for integration event fetching');
+      return;
+    }
+
+    logger.info(`Fetching integration events for ${batchedRanges.length} batched ranges`);
+
+    const fetchTasks: Promise<void>[] = [];
+
+    for (const range of batchedRanges) {
+      const perRangeTasks: Promise<void>[] = [];
+
+      switch (range.chainId) {
+        case CONSTANTS.CHAIN_IDS.SONIC:
+          perRangeTasks.push(
+            this.shadowBalanceTracker.fetchEventsForRange(range.fromBlock, range.toBlock, range.dateString),
+            this.eulerBalanceTracker.fetchEventsForRange(range.fromBlock, range.toBlock, range.dateString),
+            this.enclabsBalanceTracker.fetchEventsForRange(range.fromBlock, range.toBlock, range.dateString),
+            this.stabilityBalanceTracker.fetchEventsForRange(range.fromBlock, range.toBlock, range.dateString),
+            this.siloBalanceTracker.fetchEventsForRange(CONSTANTS.CHAIN_IDS.SONIC, range.fromBlock, range.toBlock, range.dateString)
+          );
+          break;
+
+        case CONSTANTS.CHAIN_IDS.AVALANCHE:
+          perRangeTasks.push(
+            this.siloBalanceTracker.fetchEventsForRange(CONSTANTS.CHAIN_IDS.AVALANCHE, range.fromBlock, range.toBlock, range.dateString)
+          );
+          break;
+
+        default:
+          logger.warn(`No integration fetchers configured for chain ${range.chainId}`);
+      }
+
+      if (perRangeTasks.length > 0) {
+        fetchTasks.push(
+          Promise.all(perRangeTasks).then(() => {
+            logger.debug(`Completed fetch tasks for chain ${range.chainId} blocks ${range.fromBlock}-${range.toBlock}`);
+          })
+        );
       }
     }
 
-    // Process Avalanche chain integrations using batched ranges
-    const avalancheBatchedRanges = batchedIntegrationRanges.filter(range => range.chainId === CONSTANTS.CHAIN_IDS.AVALANCHE);
-    if (avalancheBatchedRanges.length > 0) {
-      logger.info(`Processing ${avalancheBatchedRanges.length} batched Avalanche integration ranges`);
+    await Promise.all(fetchTasks);
 
-      try {
-        for (const range of avalancheBatchedRanges) {
-          const { fromBlock, toBlock } = range;
-          logger.info(`Processing Avalanche integration events from block ${fromBlock} to ${toBlock}`);
-          await this.processAvalancheIntegrations(fromBlock, toBlock, eventDate);
-        }
-        logger.info('Successfully processed all Avalanche integration events');
-      } catch (error) {
-        logger.error('Failed to process Avalanche integration events:', error);
-        throw error;
+    logger.info('Integration event fetching completed');
+  }
+
+  /**
+   * Process integration event balances for fetched events
+   */
+  private async processIntegrationEventBalances(
+    blockRanges: BlockRange[]
+  ): Promise<void> {
+    logger.info('Starting integration balance processing for stored events');
+
+    const processingTasks: Promise<void>[] = [];
+
+    const sonicRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.SONIC);
+    if (sonicRange) {
+      if (!this.roycoInitialized) {
+        await this.initializeRoycoSync();
       }
+
+      processingTasks.push(
+        this.shadowBalanceTracker.processEventsForRange(sonicRange, sonicRange.dateString),
+        this.eulerBalanceTracker.processEventsForRange(sonicRange, sonicRange.dateString),
+        this.enclabsBalanceTracker.processEventsForRange(sonicRange, sonicRange.dateString),
+        this.stabilityBalanceTracker.processEventsForRange(sonicRange, sonicRange.dateString),
+        this.siloBalanceTracker.processEventsForRange(sonicRange, sonicRange.dateString),
+        this.roycoBalanceTracker.processRoycoEvents(sonicRange.fromBlock, sonicRange.toBlock, sonicRange.dateString)
+      );
+    } else {
+      logger.warn('No Sonic block range available for integration balance processing');
     }
-  }
 
-  /**
-   * Process Sonic integration events for a given block range
-   */
-  private async processSonicIntegrations(
-    fromBlock: number,
-    toBlock: number,
-    eventDate: string
-  ): Promise<void> {
-    await this.processSonicIntegrationsForRange(fromBlock, toBlock, eventDate);
-  }
-
-  /**
-   * Process Sonic integration events for a specific block range
-   */
-  private async processSonicIntegrationsForRange(
-    fromBlock: number,
-    toBlock: number,
-    eventDate: string
-  ): Promise<void> {
-    logger.info(`Processing Sonic integration events sequentially from block ${fromBlock} to ${toBlock}`);
-    
-    // Ensure Royco is initialized before processing events
-    if (!this.roycoInitialized) {
-      await this.initializeRoycoSync();
+    const avalancheRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.AVALANCHE);
+    if (avalancheRange) {
+      processingTasks.push(
+        this.siloBalanceTracker.processEventsForRange(avalancheRange, avalancheRange.dateString)
+      );
     }
-    
-    await this.shadowBalanceTracker.processShadowEvents(fromBlock, toBlock, eventDate);
-    await this.eulerBalanceTracker.processEulerEvents(fromBlock, toBlock, eventDate);
-    await this.enclabsBalanceTracker.processEnclabsEvents(fromBlock, toBlock, eventDate);
-    await this.stabilityBalanceTracker.processStabilityEvents(fromBlock, toBlock, eventDate);
-    await this.roycoBalanceTracker.processRoycoEvents(fromBlock, toBlock, eventDate);
-    await this.siloBalanceTracker.processSiloEvents(CONSTANTS.CHAIN_IDS.SONIC, fromBlock, toBlock, eventDate);
+
+    if (processingTasks.length === 0) {
+      logger.warn('No integration balance processing tasks were scheduled');
+      return;
+    }
+
+    await Promise.all(processingTasks);
+
+    logger.info('Integration balance processing completed');
   }
 
   /**
-   * Process Avalanche integration events for a given block range
-   */
-  private async processAvalancheIntegrations(
-    fromBlock: number,
-    toBlock: number,
-    eventDate: string
-  ): Promise<void> {
-    await this.processAvalancheIntegrationsForRange(fromBlock, toBlock, eventDate);
-  }
-
-  /**
-   * Process Avalanche integration events for a specific block range
-   */
-  private async processAvalancheIntegrationsForRange(
-    fromBlock: number,
-    toBlock: number,
-    eventDate: string
-  ): Promise<void> {
-    logger.info(`Processing Avalanche integration events sequentially from block ${fromBlock} to ${toBlock}`);
-    
-    await this.siloBalanceTracker.processSiloEvents(CONSTANTS.CHAIN_IDS.AVALANCHE, fromBlock, toBlock, eventDate);
-  }
-
-  /**
-   * Sync Royco deposits from API - smart sync based on existing data
+   * Sync Royco deposits from API
    */
   async syncRoycoDeposits(): Promise<void> {
     try {
@@ -224,12 +221,11 @@ export class IntegrationIndexer {
   }
 
   /**
-   * Update integration balances based on price per share at specific block for protocols with APY
+   * Update integration balances based on price per share at specific block
    */
   async updateIntegrationBalances(blockRanges: BlockRange[]): Promise<void> {
     logger.info(`Starting integration balance updates with block ranges`);
 
-    // Find Sonic block range for all Sonic-based protocols
     const sonicRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.SONIC);
     if (sonicRange) {
       const sonicBlock = sonicRange.toBlock;
@@ -250,7 +246,6 @@ export class IntegrationIndexer {
       logger.warn('No Sonic block range found for integration balance updates');
     }
 
-    // Find Avalanche block range for Silo on Avalanche (only integration on Avalanche)
     const avalancheRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.AVALANCHE);
     if (avalancheRange) {
       const avalancheBlock = avalancheRange.toBlock;
@@ -265,140 +260,4 @@ export class IntegrationIndexer {
     logger.info('Integration balance updates completed successfully');
   }
 
-  /**
-   * Process events for a specific integration protocol
-   * Used for retry logic when validation fails
-   */
-  async processSpecificIntegration(
-    protocolName: string,
-    chainId: number,
-    fromBlock: number,
-    toBlock: number,
-    eventDate: string
-  ): Promise<void> {
-    logger.info(`Processing specific integration: ${protocolName} on chain ${chainId} from block ${fromBlock} to ${toBlock}`);
-
-    // Ensure Royco is initialized if needed
-    if (protocolName === 'royco' && !this.roycoInitialized) {
-      await this.initializeRoycoSync();
-    }
-
-    switch (protocolName) {
-      case 'shadow_exchange':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC) {
-          await this.shadowBalanceTracker.processShadowEvents(fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Shadow Exchange not supported on chain ${chainId}`);
-        }
-        break;
-
-      case 'euler_finance':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC) {
-          await this.eulerBalanceTracker.processEulerEvents(fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Euler Finance not supported on chain ${chainId}`);
-        }
-        break;
-
-      case 'enclabs':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC) {
-          await this.enclabsBalanceTracker.processEnclabsEvents(fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Enclabs not supported on chain ${chainId}`);
-        }
-        break;
-
-      case 'stability':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC) {
-          await this.stabilityBalanceTracker.processStabilityEvents(fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Stability Protocol not supported on chain ${chainId}`);
-        }
-        break;
-
-      case 'royco':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC) {
-          await this.roycoBalanceTracker.processRoycoEvents(fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Royco not supported on chain ${chainId}`);
-        }
-        break;
-
-      case 'silo_finance':
-        if (chainId === CONSTANTS.CHAIN_IDS.SONIC || chainId === CONSTANTS.CHAIN_IDS.AVALANCHE) {
-          await this.siloBalanceTracker.processSiloEvents(chainId, fromBlock, toBlock, eventDate);
-        } else {
-          logger.warn(`Silo Finance not supported on chain ${chainId}`);
-        }
-        break;
-
-      default:
-        throw new Error(`Unknown protocol name: ${protocolName}`);
-    }
-
-    logger.info(`Successfully processed specific integration: ${protocolName}`);
-  }
-
-  /**
-   * Update balances for a specific integration protocol  
-   * Used for retry logic when validation fails
-   */
-  async updateSpecificIntegrationBalances(protocolName: string, blockRanges: BlockRange[]): Promise<void> {
-    logger.info(`Updating balances for specific integration: ${protocolName}`);
-
-    // Find Sonic and Avalanche block ranges
-    const sonicRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.SONIC);
-    const avalancheRange = blockRanges.find(range => range.chainId === CONSTANTS.CHAIN_IDS.AVALANCHE);
-
-    switch (protocolName) {
-      case 'euler_finance':
-        if (sonicRange) {
-          await this.eulerBalanceTracker.updateBalancesWithPricePerShare(sonicRange.toBlock);
-        } else {
-          logger.warn('No Sonic block range available for Euler Finance update');
-        }
-        break;
-
-      case 'enclabs':
-        if (sonicRange) {
-          await this.enclabsBalanceTracker.updateBalancesWithExchangeRate(sonicRange.toBlock);
-        } else {
-          logger.warn('No Sonic block range available for Enclabs update');
-        }
-        break;
-
-      case 'stability':
-        if (sonicRange) {
-          await this.stabilityBalanceTracker.updateBalancesWithLiquidityIndex(sonicRange.toBlock);
-        } else {
-          logger.warn('No Sonic block range available for Stability update');
-        }
-        break;
-
-      case 'silo_finance':
-        // Silo is on both Sonic and Avalanche
-        if (sonicRange) {
-          await this.siloBalanceTracker.updateBalancesWithPricePerShare(CONSTANTS.CHAIN_IDS.SONIC, sonicRange.toBlock);
-        } else {
-          logger.warn('No Sonic block range available for Silo Finance on Sonic update');
-        }
-        if (avalancheRange) {
-          await this.siloBalanceTracker.updateBalancesWithPricePerShare(CONSTANTS.CHAIN_IDS.AVALANCHE, avalancheRange.toBlock);
-        } else {
-          logger.warn('No Avalanche block range available for Silo Finance on Avalanche update');
-        }
-        break;
-
-      case 'shadow_exchange':
-      case 'royco':
-        // These protocols don't have balance updates with price per share
-        logger.info(`Protocol ${protocolName} does not require balance updates`);
-        break;
-
-      default:
-        throw new Error(`Unknown protocol name: ${protocolName}`);
-    }
-
-    logger.info(`Successfully updated balances for specific integration: ${protocolName}`);
-  }
 }

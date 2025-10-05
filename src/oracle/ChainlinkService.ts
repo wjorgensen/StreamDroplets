@@ -16,8 +16,6 @@ export class ChainlinkService {
 
   /**
    * Gets ETH, BTC, USDC, and EUR prices at a specific block number
-   * @param blockNumber - The block number to get prices for
-   * @returns Object containing all four prices
    */
   async getPricesAtBlock(blockNumber: number): Promise<{
     eth: bigint;
@@ -25,17 +23,14 @@ export class ChainlinkService {
     usdc: bigint;
     eur: bigint;
   }> {
-    // Get the price feed addresses from contracts config
     const ethFeed = CONTRACTS.xETH.oracleFeed as `0x${string}`;
     const btcFeed = CONTRACTS.xBTC.oracleFeed as `0x${string}`;
     const usdcFeed = CONTRACTS.xUSD.oracleFeed as `0x${string}`;
     const eurFeed = CONTRACTS.xEUR.oracleFeed as `0x${string}`;
 
     try {
-      // Get viem client for Ethereum (chainId 1)
       const viemClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.ETHEREUM);
       
-      // Call latestRoundData for each feed at the specified block with retry logic
       const results = await Promise.allSettled([
         withAlchemyRetry(async () => {
           return await viemClient.readContract({
@@ -74,7 +69,6 @@ export class ChainlinkService {
         }, `EUR price feed at block ${blockNumber}`)
       ]);
 
-      // Process results and handle individual failures
       const prices: any = {};
       const feeds = ['eth', 'btc', 'usdc', 'eur'];
       
@@ -83,7 +77,7 @@ export class ChainlinkService {
         const feedName = feeds[i];
         
         if (result.status === 'fulfilled') {
-          prices[feedName] = result.value[1]; 
+          prices[feedName] = result.value[1];
         } else {
           const errorMessage = result.reason?.message || 'Unknown error';
           
@@ -91,7 +85,7 @@ export class ChainlinkService {
               errorMessage.includes('contract does not have the function') ||
               errorMessage.includes('address is not a contract')) {
             logger.warn(`${feedName.toUpperCase()} price feed not deployed at block ${blockNumber}, using fallback value`);
-            prices[feedName] = 0n; 
+            prices[feedName] = 0n;
           } else {
             logger.error(`Failed to fetch ${feedName.toUpperCase()} price at block ${blockNumber}:`, result.reason);
             throw new Error(`Failed to fetch ${feedName.toUpperCase()} price: ${errorMessage}`);

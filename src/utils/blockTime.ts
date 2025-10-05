@@ -4,35 +4,28 @@
  */
 
 import { Network } from 'alchemy-sdk';
-import { NetworkName, BlockByTimestampResponse } from '../config/constants';
+import { NetworkName, BlockByTimestampResponse, CONSTANTS } from '../config/constants';
 import { TYPICAL_BLOCK_TIME_SEC, networkToNetworkName } from '../config/contracts';
 import { AlchemyService } from './AlchemyService';
 import { withBlockTimeRetry } from './retryUtils';
 
-/**
- * Networks supported by Alchemy's blocks-by-timestamp API
- */
 const SUPPORTED_TIMESTAMP_NETWORKS = new Set<NetworkName>([
   'eth-mainnet',
   'base-mainnet', 
   'arb-mainnet',
-  'avax-mainnet'
+  'avax-mainnet',
+  'polygon-mainnet',
+  'bnb-mainnet'
 ]);
 
-/**
- * Options for binary search fallback
- */
 interface BinarySearchOptions {
-  /** Max retries for a single getBlock call (default 5) */
   maxRetries?: number;
-  /** Initial retry delay in ms (default 120) */
   initialBackoffMs?: number;
-  /** Multiplier for initial window size around the estimate (default 4) */
   initialWindowMultiplier?: number;
-  /** Minimum window size in blocks around the estimate (default 2048) */
   minWindow?: number;
-  /** Maximum window size in blocks around the estimate (default 2_000_000) */
   maxWindow?: number;
+  blockSpanTolerance?: number;
+  timestampToleranceSec?: number;
 }
 
 /**
@@ -46,40 +39,74 @@ async function findBlockNumberBeforeTimestampFromStart(
   alchemyService: AlchemyService,
   opts: BinarySearchOptions = {}
 ): Promise<number> {
-  const alchemy = alchemyService.getAlchemyInstance(chainId);
-
   const maxRetries = opts.maxRetries ?? 5;
   const initialBackoffMs = opts.initialBackoffMs ?? 120;
   const initialWindowMultiplier = Math.max(1, opts.initialWindowMultiplier ?? 4);
   const minWindow = Math.max(1, opts.minWindow ?? 2048);
   const maxWindow = Math.max(minWindow, opts.maxWindow ?? 2_000_000);
+  const blockSpanTolerance = Math.max(1, opts.blockSpanTolerance ?? 512);
+  const timestampToleranceSec = Math.max(0, opts.timestampToleranceSec ?? 300);
 
   const typicalBlockTime = TYPICAL_BLOCK_TIME_SEC[chainId] ?? TYPICAL_BLOCK_TIME_SEC[1] ?? 12;
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  const getBlockWithRetry = async (num: number) => {
-    let attempt = 0;
-    let delay = initialBackoffMs;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      try {
-        const b = await alchemy.core.getBlock(num);
-        if (!b || typeof b.timestamp !== 'number') {
-          throw new Error(`Block ${num} not found or missing timestamp`);
-        }
-        return b;
-      } catch (err) {
-        attempt++;
-        if (attempt > maxRetries) throw err;
-        await sleep(delay);
-        delay = Math.min(delay * 2, 2000);
-      }
-    }
-  };
+  const useViemClient = chainId === CONSTANTS.CHAIN_IDS.PLASMA;
 
-  // Get latest & genesis for bounds
-  const latestNumber = await alchemy.core.getBlockNumber();
+  let latestNumber: number;
+  let getBlockWithRetry: (num: number) => Promise<{ number: number; timestamp: number }>;
+
+  if (useViemClient) {
+    getBlockWithRetry = async (num: number) => {
+      let attempt = 0;
+      let delay = initialBackoffMs;
+      while (true) {
+        try {
+          const client = alchemyService.getViemClient(chainId);
+          const block = await client.getBlock({ blockNumber: BigInt(num) });
+          if (!block || block.timestamp === undefined || block.number === undefined) {
+            throw new Error(`Block ${num} not found or missing timestamp`);
+          }
+          const timestamp = typeof block.timestamp === 'bigint'
+            ? Number(block.timestamp)
+            : block.timestamp;
+          return { number: Number(block.number), timestamp };
+        } catch (err) {
+          attempt++;
+          if (attempt > maxRetries) throw err;
+          await sleep(delay);
+          delay = Math.min(delay * 2, 2000);
+        }
+      }
+    };
+
+    const client = alchemyService.getViemClient(chainId);
+    latestNumber = Number(await client.getBlockNumber());
+  } else {
+    const alchemy = alchemyService.getAlchemyInstance(chainId);
+    
+    getBlockWithRetry = async (num: number) => {
+      let attempt = 0;
+      let delay = initialBackoffMs;
+      while (true) {
+        try {
+          const b = await alchemy.core.getBlock(num);
+          if (!b || typeof b.timestamp !== 'number') {
+            throw new Error(`Block ${num} not found or missing timestamp`);
+          }
+          return b;
+        } catch (err) {
+          attempt++;
+          if (attempt > maxRetries) throw err;
+          await sleep(delay);
+          delay = Math.min(delay * 2, 2000);
+        }
+      }
+    };
+    
+    latestNumber = await alchemy.core.getBlockNumber();
+  }
+
   const latestBlock = await getBlockWithRetry(latestNumber);
   const latestTs = latestBlock.timestamp;
 
@@ -89,12 +116,10 @@ async function findBlockNumberBeforeTimestampFromStart(
   const genesisTs = genesisBlock.timestamp;
   if (targetTimestampSec <= genesisTs) return 0;
 
-  // Ensure start is within [0, latest]
   const start = Math.min(Math.max(0, startBlock), latestNumber);
   const startB = await getBlockWithRetry(start);
   const startTs = startB.timestamp;
 
-  // Estimate the target block near the timestamp using typical block time
   const dt = targetTimestampSec - startTs;
   const estShift = Math.trunc(dt / typicalBlockTime);
   let est = start + estShift;
@@ -103,26 +128,23 @@ async function findBlockNumberBeforeTimestampFromStart(
   if (est < 0) est = 0;
   if (est > latestNumber) est = latestNumber;
 
-  // Helper to fetch a block timestamp safely
   const getTs = async (n: number) => (await getBlockWithRetry(n)).timestamp;
 
-  // If our estimate already satisfies ts<target and next block >= target, return it quickly
   const estTs = await getTs(est);
   if (estTs < targetTimestampSec) {
     if (est === latestNumber) return est;
     const nextTs = await getTs(est + 1);
     if (nextTs >= targetTimestampSec) return est;
+    if (targetTimestampSec - estTs <= timestampToleranceSec) return est;
   } else {
-    // estTs >= target; if est > 0 check left neighbor
     if (est > 0) {
       const prevTs = await getTs(est - 1);
       if (prevTs < targetTimestampSec) return est - 1;
     }
   }
 
-  // Bracket the boundary around the estimate using exponential expansion
-  let lo = -1; // lo will satisfy ts(lo) < target
-  let hi = -1; // hi will satisfy ts(hi) >= target
+  let lo = -1;
+  let hi = -1;
 
   const directionRight = estTs < targetTimestampSec;
   let step = Math.max(
@@ -134,10 +156,9 @@ async function findBlockNumberBeforeTimestampFromStart(
   );
 
   if (directionRight) {
-    // Move right until ts >= target OR we hit latest
     let cur = est;
     while (true) {
-      lo = cur; // lo is safe: ts(lo) < target
+      lo = cur;
       if (cur === latestNumber) {
         hi = latestNumber;
         break;
@@ -152,10 +173,9 @@ async function findBlockNumberBeforeTimestampFromStart(
       step = Math.min(maxWindow, step * 2);
     }
   } else {
-    // Move left until ts < target OR we hit genesis
     let cur = est;
     while (true) {
-      hi = cur; // hi is safe: ts(hi) >= target
+      hi = cur;
       if (cur === 0) {
         lo = 0;
         break;
@@ -171,11 +191,16 @@ async function findBlockNumberBeforeTimestampFromStart(
     }
   }
 
-  // Binary search on [lo, hi] to find max n with ts(n) < target
+  if (lo >= 0 && hi >= 0 && hi - lo <= blockSpanTolerance) {
+    return Math.max(0, lo);
+  }
+
   while (lo + 1 < hi) {
+    if (hi - lo <= blockSpanTolerance) break;
     const mid = lo + Math.floor((hi - lo) / 2);
     const midTs = await getTs(mid);
     if (midTs < targetTimestampSec) {
+      if (targetTimestampSec - midTs <= timestampToleranceSec) return mid;
       lo = mid;
     } else {
       hi = mid;
@@ -200,11 +225,11 @@ export async function blocksBeforeTimestamp(
   const results: Record<string, number> = {};
   const alchemyService = AlchemyService.getInstance();
 
-  // Separate networks by support status
   const supportedNetworks = networks.filter(net => SUPPORTED_TIMESTAMP_NETWORKS.has(net));
   const unsupportedNetworks = networks.filter(net => !SUPPORTED_TIMESTAMP_NETWORKS.has(net));
 
-  // Handle supported networks with Alchemy API
+  const promises: Array<Promise<[string, number]>> = [];
+
   if (supportedNetworks.length > 0) {
     const apiKey = process.env.ALCHEMY_API_KEY;
     if (!apiKey) throw new Error('ALCHEMY_API_KEY is required in env');
@@ -215,91 +240,101 @@ export async function blocksBeforeTimestamp(
     }
 
     for (const network of supportedNetworks) {
-      const result = await withBlockTimeRetry(async () => {
-        const url = `https://api.g.alchemy.com/data/v1/${encodeURIComponent(apiKey)}/utility/blocks/by-timestamp`;
-        
-        const params = new URLSearchParams();
-        params.set('networks', network);
-        params.set('timestamp', timestamp);
-        params.set('direction', 'BEFORE');
+      promises.push((async () => {
+        const result = await withBlockTimeRetry(async () => {
+          const url = `https://api.g.alchemy.com/data/v1/${encodeURIComponent(apiKey)}/utility/blocks/by-timestamp`;
+          
+          const params = new URLSearchParams();
+          params.set('networks', network);
+          params.set('timestamp', timestamp);
+          params.set('direction', 'BEFORE');
 
-        const headers: Record<string, string> = {
-          Authorization: `Bearer ${apiKey}`,
-        };
+          const headers: Record<string, string> = {
+            Authorization: `Bearer ${apiKey}`,
+          };
 
-        const res = await doFetch(`${url}?${params.toString()}`, { 
-          method: 'GET', 
-          headers 
-        });
+          const res = await doFetch(`${url}?${params.toString()}`, {
+            method: 'GET',
+            headers
+          });
 
-        if (!res.ok) {
-          const body = await res.text().catch(() => '');
-          throw new Error(`Alchemy by-timestamp error ${res.status}: ${body || res.statusText}`);
-        }
+          if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            throw new Error(`Alchemy by-timestamp error ${res.status}: ${body || res.statusText}`);
+          }
 
-        const json = (await res.json()) as BlockByTimestampResponse;
-        
-        if (json.data && json.data.length > 0 && json.data[0]?.block) {
-          return json.data[0].block.number;
-        }
-        
-        throw new Error(`No block data returned for network ${network}`);
-      }, `fetch block for ${network}`);
+          const json = (await res.json()) as BlockByTimestampResponse;
+          
+          if (json.data && json.data.length > 0 && json.data[0]?.block) {
+            return json.data[0].block.number;
+          }
+          
+          throw new Error(`No block data returned for network ${network}`);
+        }, `fetch block for ${network}`);
 
-      results[network] = result;
+        return [network, result] as const;
+      })());
     }
   }
 
-  // Handle unsupported networks with binary search
   if (unsupportedNetworks.length > 0) {
-    const targetTimestamp = new Date(timestamp).getTime() / 1000; // Convert to unix seconds
+    const targetTimestamp = new Date(timestamp).getTime() / 1000;
 
     for (const network of unsupportedNetworks) {
-      const result = await withBlockTimeRetry(async () => {
-        // Map network name back to chainId for binary search
-        let chainId: number;
-        
-        // Find chainId from network name
-        const chainConfig = Object.values({
-          ethereum: { chainId: 1, alchemyNetwork: Network.ETH_MAINNET },
-          sonic: { chainId: 146, alchemyNetwork: Network.SONIC_MAINNET },
-          base: { chainId: 8453, alchemyNetwork: Network.BASE_MAINNET },
-          arbitrum: { chainId: 42161, alchemyNetwork: Network.ARB_MAINNET },
-          avalanche: { chainId: 43114, alchemyNetwork: Network.AVAX_MAINNET },
-          berachain: { chainId: 80094, alchemyNetwork: Network.BERACHAIN_MAINNET },
-        }).find(config => {
-          try {
-            return networkToNetworkName(config.alchemyNetwork) === network;
-          } catch {
-            return false;
+      promises.push((async () => {
+        const result = await withBlockTimeRetry(async () => {
+          let chainId: number;
+          
+          const chainConfig = Object.values({
+            ethereum: { chainId: 1, alchemyNetwork: Network.ETH_MAINNET },
+            sonic: { chainId: 146, alchemyNetwork: Network.SONIC_MAINNET },
+            base: { chainId: 8453, alchemyNetwork: Network.BASE_MAINNET },
+            arbitrum: { chainId: 42161, alchemyNetwork: Network.ARB_MAINNET },
+            avalanche: { chainId: 43114, alchemyNetwork: Network.AVAX_MAINNET },
+            berachain: { chainId: 80094, alchemyNetwork: Network.BERACHAIN_MAINNET },
+            linea: { chainId: 59144, alchemyNetwork: Network.LINEA_MAINNET },
+            polygon: { chainId: 137, alchemyNetwork: Network.MATIC_MAINNET },
+            bnb: { chainId: 56, alchemyNetwork: Network.BNB_MAINNET },
+            plasma: { chainId: 9745, alchemyNetwork: 'plasma-mainnet' as any },
+          }).find(config => {
+            try {
+              return networkToNetworkName(config.alchemyNetwork) === network;
+            } catch {
+              return false;
+            }
+          });
+
+          if (!chainConfig) {
+            throw new Error(`Could not find chainId for network ${network}`);
           }
-        });
+          chainId = chainConfig.chainId;
 
-        if (!chainConfig) {
-          throw new Error(`Could not find chainId for network ${network}`);
-        }
-        chainId = chainConfig.chainId;
+          const startBlock = startingBlocks?.[network] ?? 1000;
+          
+          return await findBlockNumberBeforeTimestampFromStart(
+            chainId,
+            targetTimestamp,
+            startBlock,
+            alchemyService
+          );
+        }, `binary search block for ${network}`);
 
-        // Use the provided starting block or fall back to a reasonable default
-        const startBlock = startingBlocks?.[network] ?? 1000;
-        
-        return await findBlockNumberBeforeTimestampFromStart(
-          chainId,
-          targetTimestamp,
-          startBlock,
-          alchemyService
-        );
-      }, `binary search block for ${network}`);
-
-      results[network] = result;
+        return [network, result] as const;
+      })());
     }
+  }
+
+  const entries = await Promise.all(promises);
+
+  for (const [network, value] of entries) {
+    results[network] = value;
   }
 
   return results;
 }
 
 /**
- * Convenience wrapper for fetching block before timestamp for a single network
+ * Fetches block before timestamp for a single network
  */
 export async function blockBeforeTimestamp(
   timestamp: string,

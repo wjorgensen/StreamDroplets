@@ -4,7 +4,7 @@
  */
 
 import { decodeEventLog, getAddress } from 'viem';
-import { CONSTANTS } from '../../config/constants';
+import { CONSTANTS, BlockRange } from '../../config/constants';
 import { INTEGRATION_CONTRACTS } from '../../config/contracts';
 import { EULER_VAULT_ABI } from '../../config/abis/eulerVault';
 import { createLogger } from '../../utils/logger';
@@ -26,6 +26,7 @@ export interface EulerEvent {
   assets?: string; // For deposit/withdraw, this is the assets amount
   fromAddress?: string; // For transfers
   toAddress?: string; // For transfers
+  ownerAddress?: string; // Canonical owner reported by the vault event
   blockNumber: number;
   timestamp: Date;
   txHash: string;
@@ -44,17 +45,24 @@ export class EulerBalanceTracker {
   }
 
   /**
-   * Fetch and process all Euler vault events for a specific block range
+   * Converts an event date string to a Date object with UTC midnight timestamp
    */
-  async processEulerEvents(
+  private getEventTimestamp(eventDate: string): Date {
+    return new Date(`${eventDate}T00:00:00.000Z`);
+  }
+
+  /**
+   * Fetches and stores Euler vault events for a block range
+   */
+  async fetchEventsForRange(
     fromBlock: number,
     toBlock: number,
     eventDate: string
   ): Promise<void> {
-    logger.info(`Processing Euler vault events from blocks ${fromBlock} to ${toBlock}`);
+    logger.info(`Fetching Euler vault events from blocks ${fromBlock} to ${toBlock}`);
     
     try {
-      const events = await this.fetchVaultEvents(fromBlock, toBlock);
+      const events = await this.fetchVaultEvents(fromBlock, toBlock, eventDate);
       
       if (events.length === 0) {
         logger.debug('No Euler vault events found in block range');
@@ -62,21 +70,85 @@ export class EulerBalanceTracker {
       }
       
       await this.storeEvents(events, eventDate);
-      await this.updateUserBalances(events, eventDate);
       
-      logger.info(`Processed ${events.length} Euler vault events`);
+      logger.info(`Stored ${events.length} Euler vault events`);
     } catch (error) {
-      logger.error('Failed to process Euler vault events:', error);
+      logger.error('Failed to fetch Euler vault events:', error);
       throw error;
     }
   }
 
   /**
-   * Fetch events from the Euler vault contract
+   * Processes stored Euler vault events to update user balances
+   */
+  async processEventsForRange(range: BlockRange, eventDate: string): Promise<void> {
+    if (range.chainId !== CONSTANTS.CHAIN_IDS.SONIC) {
+      logger.warn(`Euler Finance not supported on chain ${range.chainId}`);
+      return;
+    }
+
+    logger.info(`Processing stored Euler events for blocks ${range.fromBlock} to ${range.toBlock}`);
+
+    const records = await this.db('daily_integration_events')
+      .where({
+        event_date: eventDate,
+        protocol_name: 'euler_finance',
+        chain_id: range.chainId,
+      })
+      .whereBetween('block_number', [range.fromBlock, range.toBlock])
+      .orderBy('block_number')
+      .orderBy('tx_hash')
+      .orderBy('log_index');
+
+    if (records.length === 0) {
+      logger.debug('No stored Euler events found for processing');
+      return;
+    }
+
+    const aggregates = new Map<string, { shareDelta: bigint; lastBlock: number }>();
+
+    for (const record of records) {
+      const shareDelta = this.toBigInt(record.shares_delta);
+      if (shareDelta === 0n) {
+        continue;
+      }
+
+      const normalizedAddress = this.normalizeAddress(record.address as string);
+      const normalizedCounterparty = record.counterparty_address
+        ? this.normalizeAddress(record.counterparty_address as string)
+        : null;
+      const eventType = record.event_type?.toLowerCase();
+
+      if (record.protocol_name === 'euler_finance' && eventType === 'transfer') {
+        this.applyShareDelta(aggregates, normalizedAddress, shareDelta, record.block_number ?? 0);
+        if (normalizedCounterparty) {
+          this.applyShareDelta(aggregates, normalizedCounterparty, -shareDelta, record.block_number ?? 0);
+        }
+        continue;
+      }
+
+      this.applyShareDelta(aggregates, normalizedAddress, shareDelta, record.block_number ?? 0);
+    }
+
+    if (aggregates.size === 0) {
+      logger.debug('No Euler balance changes derived from stored events');
+      return;
+    }
+
+    for (const [address, aggregate] of aggregates.entries()) {
+      await this.updateUserBalance(address, aggregate.shareDelta, aggregate.lastBlock, eventDate);
+    }
+
+    logger.info(`Applied Euler balance updates for ${aggregates.size} address(es)`);
+  }
+
+  /**
+   * Fetches vault events from the Euler vault contract
    */
   private async fetchVaultEvents(
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
+    eventDate: string
   ): Promise<EulerEvent[]> {
     const events: EulerEvent[] = [];
 
@@ -92,12 +164,12 @@ export class EulerBalanceTracker {
 
       for (const log of logs) {
         try {
-          const event = await this.decodeLogToEvent(log);
+          const event = await this.decodeLogToEvent(log, eventDate);
           if (event) {
             events.push(event);
           }
         } catch (decodeError) {
-          logger.warn(`Failed to decode log at ${log.transactionHash}:${log.logIndex}:`, decodeError);
+          // Silently skip logs we can't decode (expected for unrelated events)
         }
       }
 
@@ -110,9 +182,9 @@ export class EulerBalanceTracker {
   }
 
   /**
-   * Decode a log to an EulerEvent
+   * Decodes a blockchain log into an EulerEvent object
    */
-  private async decodeLogToEvent(log: any): Promise<EulerEvent | null> {
+  private async decodeLogToEvent(log: any, eventDate: string): Promise<EulerEvent | null> {
     try {
       const decodedLog = decodeEventLog({
         abi: EULER_VAULT_ABI,
@@ -120,18 +192,21 @@ export class EulerBalanceTracker {
         topics: log.topics,
       });
 
-      const timestamp = new Date();
+      const timestamp = this.getEventTimestamp(eventDate);
 
       switch ((decodedLog as any).eventName) {
         case 'Deposit': {
-          const { owner, assets, shares } = decodedLog.args as any;
+          const { sender, owner, assets, shares } = decodedLog.args as any;
+          const ownerAddress = getAddress(owner as string);
+          const senderAddress = getAddress(sender as string);
           return {
             chainId: CONSTANTS.CHAIN_IDS.SONIC,
             contractAddress: getAddress(this.EULER_VAULT_ADDRESS),
             protocolName: 'euler_finance',
             protocolType: 'vault',
             eventType: 'deposit',
-            userAddress: getAddress(owner as string),
+            userAddress: ownerAddress,
+            fromAddress: senderAddress,
             amount: assets.toString(),
             shares: shares.toString(),
             assets: assets.toString(),
@@ -139,19 +214,25 @@ export class EulerBalanceTracker {
             timestamp,
             txHash: log.transactionHash,
             logIndex: log.logIndex,
+            ownerAddress,
             rawData: decodedLog,
           };
         }
 
         case 'Withdraw': {
-          const { owner, assets, shares } = decodedLog.args as any;
+          const { sender, receiver, owner, assets, shares } = decodedLog.args as any;
+          const ownerAddress = getAddress(owner as string);
+          const senderAddress = getAddress(sender as string);
+          const receiverAddress = getAddress(receiver as string);
           return {
             chainId: CONSTANTS.CHAIN_IDS.SONIC,
             contractAddress: getAddress(this.EULER_VAULT_ADDRESS),
             protocolName: 'euler_finance',
             protocolType: 'vault',
             eventType: 'withdraw',
-            userAddress: getAddress(owner as string),
+            userAddress: ownerAddress,
+            fromAddress: senderAddress,
+            toAddress: receiverAddress,
             amount: assets.toString(),
             shares: shares.toString(),
             assets: assets.toString(),
@@ -159,6 +240,7 @@ export class EulerBalanceTracker {
             timestamp,
             txHash: log.transactionHash,
             logIndex: log.logIndex,
+            ownerAddress,
             rawData: decodedLog,
           };
         }
@@ -191,7 +273,6 @@ export class EulerBalanceTracker {
         }
 
         default:
-          logger.warn(`Unknown event type: ${(decodedLog as any).eventName}`);
           return null;
       }
     } catch (error) {
@@ -202,6 +283,9 @@ export class EulerBalanceTracker {
     return null;
   }
 
+  /**
+   * Retrieves the current price per share from the Euler vault at a specific block
+   */
   async getCurrentPricePerShare(blockNumber: number): Promise<bigint> {
     try {
       const sonicViemClient = this.alchemyService.getViemClient(CONSTANTS.CHAIN_IDS.SONIC);
@@ -226,7 +310,6 @@ export class EulerBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('returned no data ("0x")') || 
           errorMessage.includes('contract does not have the function') ||
           errorMessage.includes('address is not a contract')) {
@@ -239,6 +322,9 @@ export class EulerBalanceTracker {
     }
   }
 
+  /**
+   * Updates all Euler vault balances using the current price per share
+   */
   async updateBalancesWithPricePerShare(blockNumber: number): Promise<void> {
     logger.info(`Updating Euler balances with price per share at block ${blockNumber}`);
     
@@ -280,7 +366,6 @@ export class EulerBalanceTracker {
     } catch (error) {
       const errorMessage = (error as Error).message;
       
-      // Check if this is a contract not deployed error
       if (errorMessage.includes('Contract not deployed:')) {
         logger.warn(`Euler vault not deployed at block ${blockNumber}, skipping balance updates`);
         return;
@@ -292,72 +377,170 @@ export class EulerBalanceTracker {
   }
 
   /**
-   * Store events in the daily_integration_events table
+   * Stores Euler vault events in the daily_integration_events table
    */
   private async storeEvents(events: EulerEvent[], eventDate: string): Promise<void> {
     if (events.length === 0) return;
     
-    const eventRecords = events.map(event => ({
-      address: event.userAddress.toLowerCase(),
-      asset: 'xUSD',
-      chain_id: event.chainId,
-      protocol_name: event.protocolName,
-      protocol_type: event.protocolType,
-      contract_address: event.contractAddress.toLowerCase(),
-      event_date: eventDate,
-      event_type: event.eventType,
-      amount_delta: event.eventType === 'deposit' ? (event.assets || '0') :
-                    event.eventType === 'withdraw' ? `-${event.assets || '0'}` :
-                    event.eventType === 'transfer' ? (event.shares || '0') : '0',
-      shares_delta: event.eventType === 'deposit' ? (event.shares || '0') :
-                    event.eventType === 'withdraw' ? `-${event.shares || '0'}` :
-                    event.eventType === 'transfer' ? (event.shares || '0') : '0',
-      block_number: event.blockNumber,
-      timestamp: event.timestamp,
-      tx_hash: event.txHash,
-      log_index: event.logIndex,
-      counterparty_address: event.fromAddress?.toLowerCase() || null,
-    }));
+    const filteredEvents = events.filter(event => {
+      if (event.eventType !== 'transfer') {
+        return true;
+      }
+
+      if (!event.fromAddress || !event.toAddress) {
+        return true;
+      }
+
+      try {
+        return getAddress(event.fromAddress) !== getAddress(event.toAddress);
+      } catch {
+        return event.fromAddress.toLowerCase() !== event.toAddress.toLowerCase();
+      }
+    });
+
+    const eventRecords = filteredEvents.map(event => {
+      const storageAddress = this.getStorageAddressForEvent(event);
+      const counterpartyAddress = this.getCounterpartyAddressForEvent(event, storageAddress);
+
+      return {
+        address: storageAddress,
+        asset: 'xUSD',
+        chain_id: event.chainId,
+        protocol_name: event.protocolName,
+        protocol_type: event.protocolType,
+        contract_address: event.contractAddress.toLowerCase(),
+        event_date: eventDate,
+        event_type: event.eventType,
+        amount_delta: event.eventType === 'deposit' ? (event.assets || '0') :
+                      event.eventType === 'withdraw' ? `-${event.assets || '0'}` :
+                      event.eventType === 'transfer' ? (event.shares || '0') : '0',
+        shares_delta: event.eventType === 'deposit' ? (event.shares || '0') :
+                      event.eventType === 'withdraw' ? `-${event.shares || '0'}` :
+                      event.eventType === 'transfer' ? (event.shares || '0') : '0',
+        block_number: event.blockNumber,
+        timestamp: event.timestamp,
+        tx_hash: event.txHash,
+        log_index: event.logIndex,
+        counterparty_address: counterpartyAddress,
+      };
+    });
+
+    if (eventRecords.length === 0) {
+      logger.debug('No Euler events to store after filtering');
+      return;
+    }
+
+    const nonZeroEventRecords = eventRecords.filter((record) => {
+      try {
+        return BigInt(record.amount_delta) !== 0n;
+      } catch {
+        return true;
+      }
+    });
+
+    if (nonZeroEventRecords.length === 0) {
+      logger.debug('Skipped Euler events due to zero amount_delta');
+      return;
+    }
+
+    const droppedCount = eventRecords.length - nonZeroEventRecords.length;
+    if (droppedCount > 0) {
+      logger.debug(`Dropped ${droppedCount} Euler events with zero amount_delta`);
+    }
 
     await this.db('daily_integration_events')
-      .insert(eventRecords)
-      .onConflict(['chain_id', 'tx_hash', 'log_index'])
-      .ignore();
+      .insert(nonZeroEventRecords);
       
-    logger.debug(`Stored ${eventRecords.length} Euler events`);
+    logger.debug(`Stored ${nonZeroEventRecords.length} Euler events`);
   }
 
   /**
-   * Update user balances based on events
+   * Determines the address to use for storing an event based on event type
    */
-  private async updateUserBalances(events: EulerEvent[], eventDate: string): Promise<void> {
-    const userEvents = new Map<string, EulerEvent[]>();
-    for (const event of events) {
-      const userKey = event.userAddress.toLowerCase();
-      if (!userEvents.has(userKey)) {
-        userEvents.set(userKey, []);
+  private getStorageAddressForEvent(event: EulerEvent): string {
+    const normalizedUser = this.normalizeAddress(event.userAddress);
+
+    if (event.protocolName === 'euler_finance') {
+      if (event.eventType === 'deposit' && event.fromAddress) {
+        return this.normalizeAddress(event.fromAddress);
       }
-      userEvents.get(userKey)!.push(event);
+
+      if (event.eventType === 'withdraw' && event.toAddress) {
+        return this.normalizeAddress(event.toAddress);
+      }
     }
 
-    for (const [userAddress, userEventList] of userEvents) {
-      let netShareChange = 0n;
-      
-      for (const event of userEventList) {
-        const delta = event.eventType === 'deposit' ? BigInt(event.shares || '0') :
-                      event.eventType === 'withdraw' ? -BigInt(event.shares || '0') :
-                      event.eventType === 'transfer' ? BigInt(event.shares || '0') : 0n;
-        netShareChange += delta;
+    return normalizedUser;
+  }
+
+  /**
+   * Determines the counterparty address for an event for auditing purposes
+   */
+  private getCounterpartyAddressForEvent(event: EulerEvent, storageAddress: string): string | null {
+    if (event.protocolName === 'euler_finance') {
+      if (event.eventType === 'deposit') {
+        const normalizedOwner = this.normalizeAddress(event.ownerAddress ?? event.userAddress);
+        return normalizedOwner !== storageAddress ? normalizedOwner : null;
       }
 
-      if (netShareChange !== 0n) {
-        await this.updateUserBalance(userAddress, netShareChange, userEventList[0].blockNumber, eventDate);
+      if (event.eventType === 'withdraw') {
+        const normalizedOwner = this.normalizeAddress(event.ownerAddress ?? event.userAddress);
+        return normalizedOwner !== storageAddress ? normalizedOwner : null;
       }
+
+      if (event.eventType === 'transfer') {
+        return event.fromAddress ? this.normalizeAddress(event.fromAddress) : null;
+      }
+    }
+
+    if (event.fromAddress) {
+      const normalizedFrom = this.normalizeAddress(event.fromAddress);
+      return normalizedFrom !== storageAddress ? normalizedFrom : null;
+    }
+
+    return null;
+  }
+
+  /**
+   * Normalizes an address to checksummed lowercase format
+   */
+  private normalizeAddress(value: string): string {
+    try {
+      return getAddress(value).toLowerCase();
+    } catch {
+      return value.toLowerCase();
     }
   }
 
   /**
-   * Update a single user's balance
+   * Applies a share delta to an address in the aggregates map
+   */
+  private applyShareDelta(
+    aggregates: Map<string, { shareDelta: bigint; lastBlock: number }>,
+    address: string | null,
+    delta: bigint,
+    blockNumber: number
+  ): void {
+    if (!address || delta === 0n) {
+      return;
+    }
+
+    const existing = aggregates.get(address);
+    if (existing) {
+      aggregates.set(address, {
+        shareDelta: existing.shareDelta + delta,
+        lastBlock: Math.max(existing.lastBlock, blockNumber),
+      });
+    } else {
+      aggregates.set(address, {
+        shareDelta: delta,
+        lastBlock: blockNumber,
+      });
+    }
+  }
+
+  /**
+   * Updates a user's balance in the database based on share changes
    */
   private async updateUserBalance(userAddress: string, shareChange: bigint, blockNumber: number, eventDate: string): Promise<void> {
     const currentBalance = await this.db('integration_balances')
@@ -402,6 +585,31 @@ export class EulerBalanceTracker {
           last_updated: new Date(),
           last_updated_date: eventDate,
         });
+    }
+  }
+
+  /**
+   * Converts a value to a BigInt with safe error handling
+   */
+  private toBigInt(value: any): bigint {
+    if (value === null || value === undefined) {
+      return 0n;
+    }
+
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    const str = String(value);
+    if (str.trim().length === 0) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(str);
+    } catch (error) {
+      logger.warn(`Failed to convert value to BigInt: ${value}`, error);
+      return 0n;
     }
   }
 

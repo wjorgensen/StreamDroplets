@@ -19,6 +19,10 @@ export interface ContractConfig {
   arbitrum: string;
   avalanche: string;
   berachain: string;
+  linea: string;
+  polygon: string;
+  bnb: string;
+  plasma: string;
   oracleFeed: string;
   decimals: bigint;
   ppsScale: bigint;
@@ -59,6 +63,26 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     name: 'Berachain',
     alchemyNetwork: Network.BERACHAIN_MAINNET,
   },
+  linea: {
+    chainId: 59144,
+    name: 'Linea',
+    alchemyNetwork: Network.LINEA_MAINNET,
+  },
+  polygon: {
+    chainId: 137,
+    name: 'Polygon',
+    alchemyNetwork: Network.MATIC_MAINNET,
+  },
+  bnb: {
+    chainId: 56,
+    name: 'BNB Smart Chain',
+    alchemyNetwork: Network.BNB_MAINNET,
+  },
+  plasma: {
+    chainId: 9745,
+    name: 'Plasma',
+    alchemyNetwork: 'plasma-mainnet' as Network,
+  },
 } as const;
 
 /**
@@ -86,6 +110,11 @@ export function getChainConfigByName(chainName: string): ChainConfig | undefined
  * Convert Alchemy Network enum to network name string used by blockTime API
  */
 export function networkToNetworkName(network: Network): NetworkName {
+  // Handle Plasma network (not yet in SDK)
+  if (network === ('plasma-mainnet' as any)) {
+    return 'plasma-mainnet';
+  }
+  
   const networkMapping: Partial<Record<Network, NetworkName>> = {
     [Network.ETH_MAINNET]: 'eth-mainnet',
     [Network.SONIC_MAINNET]: 'sonic-mainnet',
@@ -93,6 +122,9 @@ export function networkToNetworkName(network: Network): NetworkName {
     [Network.ARB_MAINNET]: 'arb-mainnet',
     [Network.AVAX_MAINNET]: 'avax-mainnet',
     [Network.BERACHAIN_MAINNET]: 'berachain-mainnet',
+    [Network.LINEA_MAINNET]: 'linea-mainnet',
+    [Network.MATIC_MAINNET]: 'polygon-mainnet',
+    [Network.BNB_MAINNET]: 'bnb-mainnet',
   };
   
   const networkName = networkMapping[network];
@@ -180,6 +212,7 @@ export const INTEGRATION_CONTRACTS = {
     SONIC: {
       XUSD_HLP0_POOL: '0xdee813f080f9128e52e38e9ffef8b997f9544332',
       XUSD_ASONUSDC_POOL: '0xfead02fb16ec3b2f6318dca230198db73e99428c',
+      ROUTER: '0x1d368773735ee1e678950b7a97bca2cafb330cdc',
     },
   },
 } as const;
@@ -203,7 +236,11 @@ export const CONTRACTS: Record<string, ContractConfig> = {
     base: '0x6202B9f02E30E5e1c62Cc01E4305450E5d83b926',
     arbitrum: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
     avalanche: '0x413bF752b33e76562dc876182141e2329716f250',
-    berachain: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce', 
+    berachain: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
+    linea: '0x1e39413d695a9EEF1fB6dBe298D9ce0b7A9a065a',
+    polygon: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
+    bnb: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
+    plasma: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
     oracleFeed: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419',
     decimals: 18n,
     ppsScale: 18n,
@@ -214,7 +251,11 @@ export const CONTRACTS: Record<string, ContractConfig> = {
     base: '0x09Aed31D66903C8295129aebCBc45a32E9244a1f',
     arbitrum: '0xa791082be08B890792c558F1292Ac4a2Dad21920',
     avalanche: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C',
-    berachain: '0xa791082be08B890792c558F1292Ac4a2Dad21920', 
+    berachain: '0xa791082be08B890792c558F1292Ac4a2Dad21920',
+    linea: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce',
+    polygon: '0xa791082be08B890792c558F1292Ac4a2Dad21920',
+    bnb: '0xa791082be08B890792c558F1292Ac4a2Dad21920',
+    plasma: '0xa791082be08B890792c558F1292Ac4a2Dad21920',
     oracleFeed: '0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c',
     decimals: 8n, 
     ppsScale: 8n, 
@@ -225,7 +266,11 @@ export const CONTRACTS: Record<string, ContractConfig> = {
     base: '0xa791082be08B890792c558F1292Ac4a2Dad21920', 
     arbitrum: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C', 
     avalanche: '0x94f9bB5c972285728DCee7EAece48BeC2fF341ce', 
-    berachain: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C', 
+    berachain: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C',
+    linea: '0x413bF752b33e76562dc876182141e2329716f250',
+    polygon: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C',
+    bnb: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C',
+    plasma: '0x6eAf19b2FC24552925dB245F9Ff613157a7dbb4C',
     oracleFeed: '0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6',
     decimals: 6n,
     ppsScale: 6n, 
@@ -237,6 +282,10 @@ export const CONTRACTS: Record<string, ContractConfig> = {
     arbitrum: '0x8e81A7dC7c13CDf4b2BC1BBf3dD30CbC1a3E10bA',
     avalanche: '0x54e7C2acFd23Cbf40B993EA16f974886BF892EA4',
     berachain: '0x28F1b853c98557a207479904465bc97469Ca889E',
+    linea: '0xB4329eeE0cEa38d83817034621109C87a0a6eECb',
+    polygon: '0x413bF752b33e76562dc876182141e2329716f250',
+    bnb: '0x0000000000000000000000000000000000000000',
+    plasma: '0x413bF752b33e76562dc876182141e2329716f250',
     oracleFeed: '0x04F84020Fdf10d9ee64D1dcC2986EDF2F556DA11',
     decimals: 6n,
     ppsScale: 6n,
@@ -390,6 +439,26 @@ export const DEPLOYMENT_INFO = {
       earliestBlock: 1362868,
       earliestDate: '2025-02-20', 
     },
+    LINEA: {
+      chainId: 59144,
+      earliestBlock: 22989730,
+      earliestDate: '2025-09-06',
+    },
+    POLYGON: {
+      chainId: 137,
+      earliestBlock: 76451683,
+      earliestDate: '2025-09-14',
+    },
+    BNB: {
+      chainId: 56,
+      earliestBlock: 46812629,
+      earliestDate: '2025-02-20',
+    },
+    PLASMA: {
+      chainId: 9745,
+      earliestBlock: 1296517,
+      earliestDate: '2025-09-18',
+    },
   },
 } as const;
 
@@ -416,4 +485,8 @@ export const TYPICAL_BLOCK_TIME_SEC: Record<number, number> = {
   43114: 2,   // Avalanche  
   146: 1,     // Sonic
   80094: 2,   // Berachain
+  59144: 2,   // Linea
+  137: 2,     // Polygon
+  56: 3,      // BNB Smart Chain
+  9745: 2,    // Plasma
 } as const;
