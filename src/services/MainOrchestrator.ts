@@ -41,6 +41,7 @@ export class MainOrchestrator {
   private dailySnapshotService: DailySnapshotService;
   private isRunning = false;
   private backfillComplete = false;
+  private liveFillInProgress = false;
 
   constructor() {
     this.dailySnapshotService = new DailySnapshotService();
@@ -830,7 +831,7 @@ export class MainOrchestrator {
           logger.error('Error during scheduled live fill:', error);
         }
       }
-    }, 1000);
+    }, 30000);
     
     logger.info('Real-time processing loop started');
   }
@@ -839,6 +840,11 @@ export class MainOrchestrator {
    * Checks if live fill needs to run and executes it
    */
   private async checkAndRunLiveFill(): Promise<void> {
+    if (this.liveFillInProgress) {
+      logger.debug('Live fill already in progress, skipping');
+      return;
+    }
+    
     const now = new Date();
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -853,7 +859,12 @@ export class MainOrchestrator {
       return;
     }
     
-    await this.runLiveFill(yesterdayString);
+    this.liveFillInProgress = true;
+    try {
+      await this.runLiveFill(yesterdayString);
+    } finally {
+      this.liveFillInProgress = false;
+    }
   }
 
   /**
